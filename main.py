@@ -350,7 +350,7 @@ def main():
         # --- 5. Desenhar Textos do OSD ---
         # Canto Superior Esquerdo
         cv2.putText(scene, f"M: {sim_data['flight_mode']}", (15, 30), FONT, 0.7, OSD_COLOR, 1)
-        cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.7, OSD_COLOR, 1)
+        cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.5, OSD_COLOR, 1)
 
         # Canto Superior Direito
         cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
