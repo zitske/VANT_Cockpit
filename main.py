@@ -292,38 +292,41 @@ def main():
         
         # --- 2. Criar o Canvas Principal ---
         # Fundo transparente (preto) sobre o qual desenhamos
-        scene = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+        #scene = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
-        # --- 3. Desenhar Feeds de Câmera ---
+       # --- 3. Desenhar Feeds de Câmera ---
         frame_normal, frame_thermal = create_simulated_frames(current_time)
         
         # Atribuir com base no estado de troca
         if thermal_is_main:
             main_frame = frame_thermal
             pip_frame = frame_normal
-            # Redimensionar para caber
-            main_frame_resized = cv2.resize(main_frame, (512, 384)) # 256*2, 192*2
-            pip_frame_resized = cv2.resize(pip_frame, (178, 133)) # PiP
+            # Redimensionar o PiP
+            pip_frame_resized = cv2.resize(pip_frame, (178, 133)) # PiP (tamanho normal)
         else:
             main_frame = frame_normal
             pip_frame = frame_thermal
-            main_frame_resized = cv2.resize(main_frame, (640, 480))
-            pip_frame_resized = cv2.resize(pip_frame, (160, 120)) # PiP
+            # Redimensionar o PiP
+            pip_frame_resized = cv2.resize(pip_frame, (160, 120)) # PiP (tamanho térmico)
 
-        # Colocar o frame principal (centralizado no topo)
-        main_h, main_w = main_frame_resized.shape[:2]
-        main_x = (WIDTH - main_w) // 2
-        main_y = (HEIGHT - main_h) // 2 # Um pouco para cima
-        if main_y < 0: 
-            main_y = 0
-        scene[main_y:main_y+main_h, main_x:main_x+main_w] = main_frame_resized
+        # --- NOVA LÓGICA ---
+        # 1. O 'scene' AGORA É O VÍDEO PRINCIPAL, ESTICADO PARA A TELA TODA.
+        # Isso efetivamente torna o vídeo o "fundo"
+        scene = cv2.resize(main_frame, (WIDTH, HEIGHT))
 
-        # Colocar o PiP (canto inferior direito)
+        # 2. Colocar o PiP (canto inferior direito) sobre o vídeo de fundo
         pip_h, pip_w = pip_frame_resized.shape[:2]
         scene[HEIGHT-pip_h-10 : HEIGHT-10, WIDTH-pip_w-10 : WIDTH-10] = pip_frame_resized
         # Borda no PiP
         cv2.rectangle(scene, (WIDTH-pip_w-10, HEIGHT-pip_h-10), (WIDTH-10, HEIGHT-10), OSD_COLOR, 1)
 
+        # --- 4. Desenhar OSD e PFD ---
+        # O resto do seu código (draw_artificial_horizon, draw_tape, etc.)
+        # agora desenhará DIRETAMENTE SOBRE o 'scene' (que é o vídeo).
+        
+        # Horizonte Artificial...
+        draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"], 
+                                cx=WIDTH // 2, cy=HEIGHT // 2, radius=100) # (etc...)
         # --- 4. Desenhar OSD e PFD ---
         
         # Horizonte Artificial (centralizado)
