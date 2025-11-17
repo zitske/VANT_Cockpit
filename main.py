@@ -154,21 +154,62 @@ def draw_artificial_horizon(canvas, roll_deg, pitch_deg, cx, cy, radius):
     # for r in range(-60, 61, 30):
     #     mark_x = full_cx + int(math.sin(math.radians(r)) * (WIDTH//2 - 40))
     #     cv2.line(canvas, (mark_x, roll_indicator_y), (mark_x, roll_indicator_y + 5), LINE_COLOR, 1)
+
 def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, color=(0, 255, 0), tick_range=50, step=10):
-    """Desenha uma fita de altitude ou velocidade."""
+    """Desenha uma fita de altitude ou velocidade com fundo translúcido."""
     center_y = y_pos + height // 2
     center_x = x_pos + width // 2
     
-    # Fundo da fita
-    cv2.rectangle(canvas, (x_pos, y_pos), (x_pos + width, y_pos + height), (0, 0, 0), -1)
+    # --- NOVO: Fundo de Vidro (Transparente) ---
+    # 1. Definir a transparência (alpha). 0.3 = 30% opaco.
+    alpha = 0.3
+    beta = 1.0 - alpha
+    
+    # 2. Extrair a Região de Interesse (ROI) do canvas
+    # Garantir que não saia dos limites da tela
+    y1, y2 = max(0, y_pos), min(canvas.shape[0], y_pos + height)
+    x1, x2 = max(0, x_pos), min(canvas.shape[1], x_pos + width)
+    
+    if y1 < y2 and x1 < x2: # Se a ROI for válida
+        roi_tape = canvas[y1:y2, x1:x2]
+        
+        # 3. Criar o overlay preto (mesmo tamanho da ROI)
+        black_overlay = np.zeros_like(roi_tape)
+        
+        # 4. Misturar a ROI com o overlay
+        blended_roi = cv2.addWeighted(roi_tape, beta, black_overlay, alpha, 0)
+        
+        # 5. Colocar a ROI misturada de volta no canvas
+        canvas[y1:y2, x1:x2] = blended_roi
+    # --- FIM DA MUDANÇA NO FUNDO ---
+    
+    # Borda da fita (continua igual)
     cv2.rectangle(canvas, (x_pos, y_pos), (x_pos + width, y_pos + height), color, 1)
 
+    # Definir uma opacidade maior para o fundo do texto (para legibilidade)
+    alpha_text = 0.5
+    beta_text = 1.0 - alpha_text
+
     if is_vertical:
-        # Marcador central (valor)
-        cv2.rectangle(canvas, (x_pos, center_y - 15), (x_pos + width + 20, center_y + 15), (0,0,0), -1)
+        # --- NOVO: Fundo de Vidro para o Marcador Central ---
+        y1_val, y2_val = center_y - 15, center_y + 15
+        x1_val, x2_val = x_pos, x_pos + width + 20
+        
+        # Garantir limites
+        y1_val, y2_val = max(0, y1_val), min(canvas.shape[0], y2_val)
+        x1_val, x2_val = max(0, x1_val), min(canvas.shape[1], x2_val)
+
+        if y1_val < y2_val and x1_val < x2_val:
+            roi_val = canvas[y1_val:y2_val, x1_val:x2_val]
+            black_overlay_val = np.zeros_like(roi_val)
+            blended_val = cv2.addWeighted(roi_val, beta_text, black_overlay_val, alpha_text, 0)
+            canvas[y1_val:y2_val, x1_val:x2_val] = blended_val
+        # --- FIM DA MUDANÇA ---
+        
+        # Texto do marcador (continua igual)
         cv2.putText(canvas, f"{int(value):>3}", (x_pos + 5, center_y + 10), FONT, 0.8, color, 2)
         
-        # Desenhar marcas da fita
+        # Desenhar marcas da fita (continua igual)
         pixels_per_unit = height / tick_range
         int_val = int(value)
         
@@ -180,11 +221,25 @@ def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, colo
                     cv2.putText(canvas, str(i), (x_pos + 5, y + 5), FONT, 0.5, color, 1)
 
     else: # Fita Horizontal (Bússola)
-        # Marcador central (valor)
-        cv2.rectangle(canvas, (center_x - 20, y_pos - 30), (center_x + 20, y_pos), (0,0,0), -1)
+        # --- NOVO: Fundo de Vidro para o Marcador Central ---
+        y1_comp, y2_comp = y_pos - 30, y_pos
+        x1_comp, x2_comp = center_x - 20, center_x + 20
+
+        y1_comp, y2_comp = max(0, y1_comp), min(canvas.shape[0], y2_comp)
+        x1_comp, x2_comp = max(0, x1_comp), min(canvas.shape[1], x2_comp)
+
+        if y1_comp < y2_comp and x1_comp < x2_comp:
+            roi_comp = canvas[y1_comp:y2_comp, x1_comp:x2_comp]
+            black_overlay_comp = np.zeros_like(roi_comp)
+            blended_comp = cv2.addWeighted(roi_comp, beta_text, black_overlay_comp, alpha_text, 0)
+            canvas[y1_comp:y2_comp, x1_comp:x2_comp] = blended_comp
+        # --- FIM DA MUDANÇA ---
+        
+        # Texto do marcador (continua igual)
         cv2.putText(canvas, f"{int(value):03}", (center_x - 18, y_pos - 8), FONT, 0.8, color, 2)
         cv2.line(canvas, (center_x, y_pos), (center_x, y_pos + 10), color, 2)
         
+        # Marcas da fita (continua igual)
         pixels_per_unit = width / tick_range
         int_val = int(value)
         
@@ -202,7 +257,6 @@ def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, colo
                     cv2.line(canvas, (x, y_pos), (x, y_pos + 10), color, 2)
                     if i_norm % 30 == 0: # Rótulos maiores
                         cv2.putText(canvas, lbl, (x - 10, y_pos + 30), FONT, 0.6, color, 1)
-
 
 # --- Loop Principal da Interface ---
 
