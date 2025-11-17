@@ -53,81 +53,107 @@ def create_simulated_frames(t):
     return frame_normal, frame_thermal
 
 def draw_artificial_horizon(canvas, roll_deg, pitch_deg, cx, cy, radius):
-    """Desenha um Horizonte Artificial (AHI) completo."""
+    """
+    Desenha um Horizonte Artificial (AHI) completo como um overlay transparente,
+    cobindo a tela toda com as linhas de pitch e indicador de roll.
+    """
     
     # Cores
-    SKY_COLOR = (255, 128, 0) # Azul
-    GROUND_COLOR = (0, 80, 130) # Marrom
+    # SKY_COLOR = (255, 128, 0) # Não mais usado
+    # GROUND_COLOR = (0, 80, 130) # Não mais usado
+    LINE_COLOR = OSD_COLOR # Usar a cor OSD para as linhas
 
     # Converter para radianos
     roll = math.radians(roll_deg)
     pitch = math.radians(pitch_deg)
     
-    # --- 1. Desenhar o Fundo (Céu e Terra) ---
-    # Criar um canvas temporário para o mundo rotacionado
-    world_size = radius * 3
-    world_canvas = np.zeros((world_size, world_size, 3), dtype=np.uint8)
+    # --- Parâmetros de Redesenho para tela cheia ---
+    # Agora o AHI será desenhado diretamente sobre o 'canvas' principal
+    # Usaremos WIDTH e HEIGHT da tela inteira como referência
     
-    # Calcular o deslocamento do pitch (quantos pixels o horizonte se move)
-    # 'pixels_per_degree' é um fator de zoom; 5 é um bom valor
-    pixels_per_degree = 5
-    pitch_shift = int(pitch_deg * pixels_per_degree)
+    # O centro de rotação e escala será o centro da tela
+    full_cx, full_cy = canvas.shape[1] // 2, canvas.shape[0] // 2
     
-    # Calcular o ponto central do horizonte
-    horizon_y = (world_size // 2) - pitch_shift
+    # A "escala" do pitch será baseada na altura total da tela
+    # Ajuste 'pixels_per_degree' para controlar o "zoom" do pitch
+    pixels_per_degree = 4 # Valor ajustado para preencher a tela verticalmente
     
-    # Desenhar Céu e Terra
-    cv2.rectangle(world_canvas, (0, 0), (world_size, horizon_y), SKY_COLOR, -1)
-    cv2.rectangle(world_canvas, (0, horizon_y), (world_size, world_size), GROUND_COLOR, -1)
+    # Calcular o deslocamento vertical do pitch
+    pitch_shift_y = int(pitch_deg * pixels_per_degree)
 
-    # --- 2. Desenhar a Escala de Pitch ---
-    for p in range(-90, 91, 10): # Linhas a cada 10 graus
-        if p == 0: continue
-        line_y = (world_size // 2) - int(p * pixels_per_degree) - pitch_shift
+    # Criar um canvas temporário para as linhas de pitch, para que possamos rotacioná-lo
+    # Este canvas será do tamanho da tela principal para o overlay
+    overlay = np.zeros_like(canvas) # Cria uma cópia preta com as mesmas dimensões
+
+    # --- Desenhar a Linha Central do Horizonte (0 graus pitch) ---
+    horizon_center_y = full_cy - pitch_shift_y
+    
+    # Desenhar as linhas de pitch (branco)
+    # Linha central (0 graus)
+    cv2.line(overlay, (0, horizon_center_y), (canvas.shape[1], horizon_center_y), LINE_COLOR, 2)
+    
+    # --- Desenhar a Escala de Pitch ---
+    # Linhas de +10, +20, +30, etc. (acima do horizonte)
+    for p in range(10, 91, 10): # Linhas positivas
+        line_y = full_cy - int(p * pixels_per_degree) - pitch_shift_y
+        if line_y < 0: continue # Não desenha fora da tela
         
-        if abs(p) % 20 == 0: # Linha mais longa
-            cv2.line(world_canvas, (world_size//2 - 60, line_y), (world_size//2 + 60, line_y), (255, 255, 255), 2)
-            cv2.putText(world_canvas, str(p), (world_size//2 - 90, line_y + 5), FONT, 0.6, (255, 255, 255), 1)
-        else: # Linha mais curta
-            cv2.line(world_canvas, (world_size//2 - 30, line_y), (world_size//2 + 30, line_y), (255, 255, 255), 1)
+        line_length = 60 if abs(p) % 20 == 0 else 30 # Mais longo para múltiplos de 20
+        cv2.line(overlay, (full_cx - line_length, line_y), (full_cx + line_length, line_y), LINE_COLOR, 1)
+        cv2.putText(overlay, str(p), (full_cx + line_length + 5, line_y + 5), FONT, 0.6, LINE_COLOR, 1)
 
-    # --- 3. Rotacionar o Mundo (para o Roll) ---
-    M = cv2.getRotationMatrix2D((world_size // 2, world_size // 2), -roll_deg, 1)
-    rotated_world = cv2.warpAffine(world_canvas, M, (world_size, world_size))
-    
-    # --- 4. Recortar e Colar no Canvas Principal ---
-    # Pegar o centro do mundo rotacionado e colar no canvas principal
-    x_start = (world_size // 2) - (radius)
-    x_end = (world_size // 2) + (radius)
-    y_start = (world_size // 2) - (radius)
-    y_end = (world_size // 2) + (radius)
-    
-    # Criar uma máscara circular
-    mask = np.zeros((radius*2, radius*2, 3), dtype=np.uint8)
-    cv2.circle(mask, (radius, radius), radius, (255, 255, 255), -1)
-    
-    # Aplicar máscara e copiar
-    roi = canvas[cy-radius:cy+radius, cx-radius:cx+radius]
-    display_world = rotated_world[y_start:y_end, x_start:x_end]
-    display_world_masked = cv2.bitwise_and(display_world, mask)
-    
-    # Criar um fundo preto para a máscara
-    bg_black = cv2.bitwise_and(roi, cv2.bitwise_not(mask))
-    
-    canvas[cy-radius:cy+radius, cx-radius:cx+radius] = cv2.add(bg_black, display_world_masked)
+    # Linhas de -10, -20, -30, etc. (abaixo do horizonte)
+    for p in range(-10, -91, -10): # Linhas negativas
+        line_y = full_cy - int(p * pixels_per_degree) - pitch_shift_y
+        if line_y > canvas.shape[0]: continue # Não desenha fora da tela
+        
+        line_length = 60 if abs(p) % 20 == 0 else 30
+        cv2.line(overlay, (full_cx - line_length, line_y), (full_cx + line_length, line_y), LINE_COLOR, 1)
+        cv2.putText(overlay, str(p), (full_cx + line_length + 5, line_y + 5), FONT, 0.6, LINE_COLOR, 1)
 
-    # --- 5. Desenhar o Símbolo Fixo da Aeronave ---
-    cv2.line(canvas, (cx - 40, cy), (cx - 10, cy), OSD_COLOR, 3)
-    cv2.line(canvas, (cx + 10, cy), (cx + 40, cy), OSD_COLOR, 3)
-    cv2.line(canvas, (cx, cy - 10), (cx, cy + 10), OSD_COLOR, 3) # V-bar central
-    
-    # --- 6. Desenhar o Indicador de Roll (Topo) ---
-    cv2.line(canvas, (cx, cy - radius), (cx, cy - radius + 15), OSD_COLOR, 3)
-    # Desenha o triângulo de roll
-    r_x1 = cx + int((radius - 10) * math.sin(roll))
-    r_y1 = cy - int((radius - 10) * math.cos(roll))
-    cv2.line(canvas, (cx, cy), (r_x1, r_y1), OSD_COLOR, 2)
 
+    # --- Rotacionar o Overlay (para o Roll) ---
+    M = cv2.getRotationMatrix2D((full_cx, full_cy), -roll_deg, 1)
+    rotated_overlay = cv2.warpAffine(overlay, M, (canvas.shape[1], canvas.shape[0]))
+    
+    # --- Mesclar o Overlay Rotacionado com o Canvas Principal ---
+    # Usamos o cv2.addWeighted para mesclar de forma transparente (ou cv2.add para simples overlay)
+    # Para um OSD, geralmente cv2.add é suficiente, pois as linhas são finas
+    canvas[:] = cv2.add(canvas, rotated_overlay) # Adiciona as linhas sobre o vídeo
+
+
+    # --- Desenhar o Símbolo Fixo da Aeronave (no centro da tela) ---
+    # Estes símbolos não rotacionam com o roll/pitch, são fixos na tela
+    symbol_arm_length = 50
+    symbol_gap = 10
+    
+    # Asa Esquerda
+    cv2.line(canvas, (full_cx - symbol_arm_length, full_cy), (full_cx - symbol_gap, full_cy), LINE_COLOR, 3)
+    # Asa Direita
+    cv2.line(canvas, (full_cx + symbol_gap, full_cy), (full_cx + symbol_arm_length, full_cy), LINE_COLOR, 3)
+    # Linha central vertical (indicador de nariz)
+    cv2.line(canvas, (full_cx, full_cy - symbol_gap), (full_cx, full_cy + symbol_gap), LINE_COLOR, 3)
+    
+    # --- Desenhar o Indicador de Roll (Linha horizontal no topo da tela) ---
+    # Isso pode ser feito com uma pequena escala de roll no topo, se desejar
+    # Por enquanto, vamos fazer um indicador simples
+    roll_indicator_y = 10 # Posição vertical para o indicador no topo
+    roll_indicator_len = 40 # Comprimento do indicador
+    
+    # Desenha um pequeno "triângulo" que indica o roll
+    roll_line_start = (full_cx + int(math.sin(roll) * roll_indicator_len), 
+                       roll_indicator_y + int(math.cos(roll) * roll_indicator_len / 2))
+    roll_line_end = (full_cx - int(math.sin(roll) * roll_indicator_len), 
+                     roll_indicator_y - int(math.cos(roll) * roll_indicator_len / 2))
+    #cv2.line(canvas, roll_line_start, roll_line_end, LINE_COLOR, 2)
+    
+    # Uma forma mais simples: uma pequena seta no topo
+    roll_arrow_x = full_cx + int(math.sin(roll) * (WIDTH//2 - 20)) # Move ao longo do topo
+    cv2.line(canvas, (roll_arrow_x, roll_indicator_y), (roll_arrow_x, roll_indicator_y + 10), LINE_COLOR, 2)
+    # Adicionar as marcas de roll no topo (opcional, pode ficar poluído)
+    # for r in range(-60, 61, 30):
+    #     mark_x = full_cx + int(math.sin(math.radians(r)) * (WIDTH//2 - 40))
+    #     cv2.line(canvas, (mark_x, roll_indicator_y), (mark_x, roll_indicator_y + 5), LINE_COLOR, 1)
 def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, color=(0, 255, 0), tick_range=50, step=10):
     """Desenha uma fita de altitude ou velocidade."""
     center_y = y_pos + height // 2
@@ -233,7 +259,7 @@ def main():
         # Colocar o frame principal (centralizado no topo)
         main_h, main_w = main_frame_resized.shape[:2]
         main_x = (WIDTH - main_w) // 2
-        main_y = (HEIGHT - main_h) // 2 - 50 # Um pouco para cima
+        main_y = (HEIGHT - main_h) // 2 # Um pouco para cima
         if main_y < 0: 
             main_y = 0
         scene[main_y:main_y+main_h, main_x:main_x+main_w] = main_frame_resized
