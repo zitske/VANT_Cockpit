@@ -29,29 +29,50 @@ sim_data = {
 
 # --- Funções de Desenho da Interface ---
 
-def create_simulated_frames(t):
-    """Gera dois frames de câmera falsos e animados."""
-    
-    # Frame 1 (Simulando Câmera Normal)
-    frame_normal = np.zeros((480, 640, 3), dtype=np.uint8)
-    frame_normal[:, :] = (80, 40, 40) # Fundo azul escuro
-    cv2.putText(frame_normal, "NORMAL CAM", (180, 240), FONT, 1, (255, 255, 255), 2)
-    # Adiciona um "ruído" animado
-    noise = np.random.randint(0, 15, (480, 640, 3), dtype=np.uint8)
-    frame_normal = cv2.add(frame_normal, noise)
 
-    # Frame 2 (Simulando Câmera Térmica)
-    frame_thermal = np.zeros((192, 256, 3), dtype=np.uint8)
-    frame_thermal[:, :] = (50, 50, 50) # Fundo cinza
-    cv2.putText(frame_thermal, "THERMAL", (60, 100), FONT, 0.8, (255, 255, 255), 1)
-    # Simula um "hotspot" térmico
-    cx = int(128 + math.sin(t) * 50)
-    cy = int(96 + math.cos(t * 0.7) * 30)
-    cv2.circle(frame_thermal, (cx, cy), 20, (0, 165, 255), -1) # Círculo laranja
-    frame_thermal = cv2.applyColorMap(frame_thermal, cv2.COLORMAP_INFERNO)
+# A função agora recebe cap_normal e cap_thermal
+def create_simulated_frames(t, cap_normal, cap_thermal):
+    """Lê um frame de ambos os vídeos de simulação."""
+    
+    # --- Frame 1 (Simulando Câmera Normal) - CÓDIGO SUBSTITUÍDO ---
+    
+    # Se o vídeo normal foi carregado corretamente
+    if cap_normal:
+        ret_nm, frame_normal = cap_normal.read()
+        
+        # Se o vídeo normal terminou (not ret_nm), reinicia (loop)
+        if not ret_nm:
+            cap_normal.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret_nm, frame_normal = cap_normal.read()
+    else:
+        # Fallback se o vídeo falhou ao carregar
+        ret_nm = False
+
+    # Se a leitura falhou (mesmo após o loop) ou o vídeo não foi carregado
+    if not cap_normal or not ret_nm:
+        frame_normal = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame_normal[:, :] = (80, 40, 40) # Fundo azul escuro
+        cv2.putText(frame_normal, "VIDEO ERROR", (180, 240), FONT, 1, (0, 0, 255), 2)
+
+    # --- Frame 2 (Simulando Câmera Térmica) - Fica igual ao anterior ---
+    
+    if cap_thermal:
+        ret_th, frame_thermal = cap_thermal.read()
+        
+        if not ret_th:
+            cap_thermal.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret_th, frame_thermal = cap_thermal.read()
+    else:
+        ret_th = False
+
+    if not cap_thermal or not ret_th:
+        frame_thermal = np.zeros((192, 256, 3), dtype=np.uint8)
+        frame_thermal[:, :] = (50, 50, 50) # Fundo cinza
+        cv2.putText(frame_thermal, "VIDEO ERROR", (60, 100), FONT, 0.8, (0, 0, 255), 1)
+        # Aplica um colormap para manter a estética
+        frame_thermal = cv2.applyColorMap(frame_thermal, cv2.COLORMAP_INFERNO)
     
     return frame_normal, frame_thermal
-
 def draw_artificial_horizon(canvas, roll_deg, pitch_deg, cx, cy, radius):
     """
     Desenha um Horizonte Artificial (AHI) completo como um overlay transparente,
@@ -262,7 +283,17 @@ def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, colo
 
 def main():
     global sim_data # Usar o dicionário global
+    cap_thermal = cv2.VideoCapture('demothermal.mp4')
+    if not cap_thermal.isOpened():
+        print("Erro: Nao foi possivel abrir o video demothermal.mp4")
+        print("Usando simulacao de fallback.")
+        cap_thermal = None # Define como None se falhar
 
+    cap_normal = cv2.VideoCapture('demonormal.mp4')
+    if not cap_normal.isOpened():
+        print("Erro: Nao foi possivel abrir o video demonormal.mp4")
+        print("Usando simulacao de fallback.")
+        cap_normal = None
     # Estado da Câmera
     thermal_is_main = sim_data["thermal_is_main"]
 
@@ -295,8 +326,8 @@ def main():
         #scene = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
        # --- 3. Desenhar Feeds de Câmera ---
-        frame_normal, frame_thermal = create_simulated_frames(current_time)
-        
+        #frame_normal, frame_thermal = create_simulated_frames(current_time)
+        frame_normal, frame_thermal = create_simulated_frames(current_time, cap_normal, cap_thermal)
         # Atribuir com base no estado de troca
         if thermal_is_main:
             main_frame = frame_thermal
@@ -375,7 +406,10 @@ def main():
             thermal_is_main = not thermal_is_main
             sim_data["thermal_is_main"] = thermal_is_main # Atualiza o estado global
 
-
+    if cap_thermal:
+        cap_thermal.release()
+    if cap_normal: # ADICIONADO
+        cap_normal.release()
     cv2.destroyAllWindows()
 
 # --- Rodar o Programa ---
