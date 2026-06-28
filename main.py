@@ -2,11 +2,20 @@ import cv2
 import numpy as np
 import math
 import time
+import os
+from pathlib import Path
+
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None
 
 # --- Configurações da Interface ---
 WIDTH, HEIGHT = 720, 576 # Resolução PAL SD
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
+YOLO_WEIGHTS_PATH = Path(os.getenv("YOLO_WEIGHTS_PATH", "yolo26.pt"))
+YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -279,10 +288,41 @@ def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, colo
                     if i_norm % 30 == 0: # Rótulos maiores
                         cv2.putText(canvas, lbl, (x - 10, y_pos + 30), FONT, 0.6, color, 1)
 
+
+def load_person_detector():
+    if YOLO is None:
+        print("Aviso: ultralytics nao esta instalado; deteccao YOLO desativada.")
+        return None
+
+    if not YOLO_WEIGHTS_PATH.exists():
+        print(f"Aviso: peso YOLO nao encontrado em {YOLO_WEIGHTS_PATH}; deteccao desativada.")
+        return None
+
+    try:
+        return YOLO(str(YOLO_WEIGHTS_PATH))
+    except Exception as exc:
+        print(f"Aviso: nao foi possivel carregar YOLO ({exc}); deteccao desativada.")
+        return None
+
+
+def draw_person_detections(frame, detector):
+    if detector is None:
+        return frame
+
+    try:
+        results = detector.predict(frame, conf=YOLO_CONFIDENCE, classes=[0], verbose=False)
+        if not results:
+            return frame
+        return results[0].plot()
+    except Exception as exc:
+        print(f"Aviso: falha na deteccao YOLO ({exc}); seguindo sem overlay.")
+        return frame
+
 # --- Loop Principal da Interface ---
 
 def main():
     global sim_data # Usar o dicionário global
+    person_detector = load_person_detector()
     cap_thermal = cv2.VideoCapture('demothermal.mp4')
     if not cap_thermal.isOpened():
         print("Erro: Nao foi possivel abrir o video demothermal.mp4")
@@ -328,6 +368,7 @@ def main():
        # --- 3. Desenhar Feeds de Câmera ---
         #frame_normal, frame_thermal = create_simulated_frames(current_time)
         frame_normal, frame_thermal = create_simulated_frames(current_time, cap_normal, cap_thermal)
+        frame_thermal = draw_person_detections(frame_thermal, person_detector)
         # Atribuir com base no estado de troca
         if thermal_is_main:
             main_frame = frame_thermal
