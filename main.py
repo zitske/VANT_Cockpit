@@ -342,12 +342,30 @@ def draw_person_detections(frame, detector):
         print(f"Aviso: falha na deteccao YOLO ({exc}); seguindo sem overlay.")
         return frame
 
+
+def draw_status_banner(canvas, text, color=OSD_COLOR):
+    banner_width = min(canvas.shape[1] - 40, max(280, len(text) * 12 + 40))
+    banner_height = 44
+    x1 = (canvas.shape[1] - banner_width) // 2
+    y1 = 20
+    x2 = x1 + banner_width
+    y2 = y1 + banner_height
+
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 0), -1)
+    canvas[:] = cv2.addWeighted(overlay, 0.45, canvas, 0.55, 0)
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(canvas, text, (x1 + 18, y1 + 29), FONT, 0.8, color, 2)
+
 # --- Loop Principal da Interface ---
 
 def main():
     global sim_data, WIDTH, HEIGHT # Usar o dicionário global e a resolução detectada
     WIDTH, HEIGHT = get_display_resolution()
     person_detector = load_person_detector()
+    person_detection_enabled = False
+    detection_status_text = ""
+    detection_status_until = 0.0
     cap_thermal = cv2.VideoCapture('demothermal.mp4')
     if not cap_thermal.isOpened():
         print("Erro: Nao foi possivel abrir o video demothermal.mp4")
@@ -397,7 +415,9 @@ def main():
        # --- 3. Desenhar Feeds de Câmera ---
         #frame_normal, frame_thermal = create_simulated_frames(current_time)
         frame_normal, frame_thermal = create_simulated_frames(current_time, cap_normal, cap_thermal)
-        frame_thermal = draw_person_detections(frame_thermal, person_detector)
+        if person_detection_enabled:
+            frame_normal = draw_person_detections(frame_normal, person_detector)
+            frame_thermal = draw_person_detections(frame_thermal, person_detector)
         # Atribuir com base no estado de troca
         if thermal_is_main:
             main_frame = frame_thermal
@@ -453,6 +473,9 @@ def main():
         cv2.putText(scene, f"M: {sim_data['flight_mode']}", (15, 30), FONT, 0.7, OSD_COLOR, 1)
         cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.5, OSD_COLOR, 1)
 
+        if person_detection_enabled:
+            cv2.putText(scene, "DET PESSOAS: ON", (15, 90), FONT, 0.6, OSD_COLOR, 2)
+
         # Canto Superior Direito
         cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
 
@@ -462,6 +485,9 @@ def main():
         
         # Canto Inferior (Centro) - Home
         cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
+
+        if current_time < detection_status_until and detection_status_text:
+            draw_status_banner(scene, detection_status_text)
 
 
         # --- 6. Exibir a Cena ---
@@ -475,6 +501,12 @@ def main():
         if key == ord('s'): # 's' para Trocar (Swap)
             thermal_is_main = not thermal_is_main
             sim_data["thermal_is_main"] = thermal_is_main # Atualiza o estado global
+        if key == ord('d'):
+            person_detection_enabled = not person_detection_enabled
+            detection_status_text = (
+                "DETECCAO DE PESSOAS ATIVADA" if person_detection_enabled else "DETECCAO DE PESSOAS DESATIVADA"
+            )
+            detection_status_until = current_time + 2.0
 
     if cap_thermal:
         cap_thermal.release()
