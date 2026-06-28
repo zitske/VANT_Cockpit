@@ -10,12 +10,18 @@ try:
 except ImportError:
     YOLO = None
 
+try:
+    import tkinter as tk
+except ImportError:
+    tk = None
+
 # --- Configurações da Interface ---
 WIDTH, HEIGHT = 720, 576 # Resolução PAL SD
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
-YOLO_WEIGHTS_PATH = Path(os.getenv("YOLO_WEIGHTS_PATH", "yolo26.pt"))
+YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
+YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -35,6 +41,25 @@ sim_data = {
     "flight_mode": "STABILIZE",
     "thermal_is_main": True # Estado de troca de câmera
 }
+
+
+def get_display_resolution(default_width=WIDTH, default_height=HEIGHT):
+    if tk is None:
+        return default_width, default_height
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        root.destroy()
+
+        if screen_width > 0 and screen_height > 0:
+            return screen_width, screen_height
+    except Exception:
+        pass
+
+    return default_width, default_height
 
 # --- Funções de Desenho da Interface ---
 
@@ -294,14 +319,13 @@ def load_person_detector():
         print("Aviso: ultralytics nao esta instalado; deteccao YOLO desativada.")
         return None
 
-    if not YOLO_WEIGHTS_PATH.exists():
-        print(f"Aviso: peso YOLO nao encontrado em {YOLO_WEIGHTS_PATH}; deteccao desativada.")
-        return None
-
     try:
-        return YOLO(str(YOLO_WEIGHTS_PATH))
+        source = Path(YOLO_MODEL_SOURCE)
+        if source.exists():
+            return YOLO(str(source))
+        return YOLO(YOLO_MODEL_SOURCE)
     except Exception as exc:
-        print(f"Aviso: nao foi possivel carregar YOLO ({exc}); deteccao desativada.")
+        print(f"Aviso: nao foi possivel carregar YOLO em {YOLO_MODEL_SOURCE} ({exc}); deteccao desativada.")
         return None
 
 
@@ -310,7 +334,7 @@ def draw_person_detections(frame, detector):
         return frame
 
     try:
-        results = detector.predict(frame, conf=YOLO_CONFIDENCE, classes=[0], verbose=False)
+        results = detector.predict(frame, conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ, device="cpu", classes=[0], verbose=False)
         if not results:
             return frame
         return results[0].plot()
@@ -321,7 +345,8 @@ def draw_person_detections(frame, detector):
 # --- Loop Principal da Interface ---
 
 def main():
-    global sim_data # Usar o dicionário global
+    global sim_data, WIDTH, HEIGHT # Usar o dicionário global e a resolução detectada
+    WIDTH, HEIGHT = get_display_resolution()
     person_detector = load_person_detector()
     cap_thermal = cv2.VideoCapture('demothermal.mp4')
     if not cap_thermal.isOpened():
@@ -336,6 +361,10 @@ def main():
         cap_normal = None
     # Estado da Câmera
     thermal_is_main = sim_data["thermal_is_main"]
+    window_name = "FPV Interface Sim"
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     last_time = time.time()
 
@@ -437,7 +466,7 @@ def main():
 
         # --- 6. Exibir a Cena ---
         # 'scene' é o frame final que será enviado para a saída AV
-        cv2.imshow("FPV Interface Sim", scene)
+        cv2.imshow(window_name, scene)
 
         # --- 7. Lidar com Entradas ---
         key = cv2.waitKey(1) & 0xFF
