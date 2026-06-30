@@ -130,7 +130,8 @@ def create_simulated_frames(t, cap_normal, cap_thermal):
         loop=False,
     )
 
-    frame_thermal = cv2.applyColorMap(frame_thermal, cv2.COLORMAP_INFERNO)
+    if len(frame_thermal.shape) == 2 or frame_thermal.shape[2] == 1:
+        frame_thermal = cv2.cvtColor(frame_thermal, cv2.COLOR_GRAY2BGR)
 
     return frame_normal, frame_thermal
 def draw_artificial_horizon(canvas, roll_deg, pitch_deg, cx, cy, radius):
