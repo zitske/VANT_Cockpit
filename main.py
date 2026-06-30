@@ -24,8 +24,6 @@ YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
 CAPTURE_DIR = Path(os.getenv("YOLO_CAPTURE_DIR", "captures"))
-NORMAL_CAMERA_SOURCE = int(os.getenv("NORMAL_CAMERA_SOURCE", "0"))
-THERMAL_CAMERA_SOURCE = int(os.getenv("THERMAL_CAMERA_SOURCE", "2"))
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -413,17 +411,17 @@ def main():
     person_capture_enabled = False
     status_text = ""
     status_until = 0.0
-    cap_thermal = cv2.VideoCapture(THERMAL_CAMERA_SOURCE)
-    if not cap_thermal.isOpened():
-        print(f"Erro: Nao foi possivel abrir a camera {THERMAL_CAMERA_SOURCE}")
+    cam2 = cv2.VideoCapture(2)
+    if not cam2.isOpened():
+        print("Erro: Nao foi possivel abrir a camera 2")
         print("Usando simulacao de fallback.")
-        cap_thermal = None # Define como None se falhar
+        cam2 = None # Define como None se falhar
 
-    cap_normal = cv2.VideoCapture(NORMAL_CAMERA_SOURCE)
-    if not cap_normal.isOpened():
-        print(f"Erro: Nao foi possivel abrir a camera {NORMAL_CAMERA_SOURCE}")
+    am1 = cv2.VideoCapture(0)
+    if not am1.isOpened():
+        print("Erro: Nao foi possivel abrir a camera 0")
         print("Usando simulacao de fallback.")
-        cap_normal = None
+        am1 = None
     # Estado da Câmera
     thermal_is_main = sim_data["thermal_is_main"]
     window_name = "FPV Interface Sim"
@@ -461,7 +459,7 @@ def main():
 
        # --- 3. Desenhar Feeds de Câmera ---
         #frame_normal, frame_thermal = create_simulated_frames(current_time)
-        frame_normal, frame_thermal = create_simulated_frames(current_time, cap_normal, cap_thermal)
+        frame_normal, frame_thermal = create_simulated_frames(current_time, am1, cam2)
         normal_detections = []
         thermal_detections = []
         if person_detection_enabled:
@@ -572,10 +570,10 @@ def main():
             )
             status_until = current_time + 2.0
 
-    if cap_thermal:
-        cap_thermal.release()
-    if cap_normal: # ADICIONADO
-        cap_normal.release()
+    if cam2:
+        cam2.release()
+    if am1:
+        am1.release()
     cv2.destroyAllWindows()
 
 # --- Rodar o Programa ---
