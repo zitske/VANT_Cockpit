@@ -4,6 +4,7 @@ import math
 import time
 import os
 from pathlib import Path
+from datetime import datetime
 
 try:
     from ultralytics import YOLO
@@ -22,6 +23,7 @@ OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
 YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
+CAPTURE_DIR = Path(os.getenv("YOLO_CAPTURE_DIR", "captures"))
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -329,18 +331,65 @@ def load_person_detector():
         return None
 
 
-def draw_person_detections(frame, detector):
+def detect_persons(frame, detector):
     if detector is None:
-        return frame
+        return frame, []
 
     try:
         results = detector.predict(frame, conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ, device="cpu", classes=[0], verbose=False)
         if not results:
-            return frame
-        return results[0].plot()
+            return frame, []
+
+        annotated = frame.copy()
+        detections = []
+        frame_height, frame_width = annotated.shape[:2]
+        center_x = frame_width // 2
+        center_y = frame_height // 2
+
+        boxes = results[0].boxes
+        if boxes is None or len(boxes) == 0:
+            return annotated, []
+
+        for index, box in enumerate(boxes.xyxy.cpu().numpy(), start=1):
+            x1, y1, x2, y2 = [int(value) for value in box]
+            person_x = int((x1 + x2) / 2)
+            person_y = int((y1 + y2) / 2)
+            offset_x = person_x - center_x
+            offset_y = person_y - center_y
+            detections.append({
+                "index": index,
+                "bbox": (x1, y1, x2, y2),
+                "center": (person_x, person_y),
+                "offset": (offset_x, offset_y),
+            })
+
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), OSD_COLOR, 2)
+            label = f"P{index} X:{person_x} Y:{person_y} dX:{offset_x:+d} dY:{offset_y:+d}"
+            label_y = max(20, y1 - 10)
+            cv2.putText(annotated, label, (x1, label_y), FONT, 0.5, OSD_COLOR, 2)
+
+        return annotated, detections
     except Exception as exc:
         print(f"Aviso: falha na deteccao YOLO ({exc}); seguindo sem overlay.")
-        return frame
+        return frame, []
+
+
+def save_person_snapshot(scene, detections, capture_dir=CAPTURE_DIR):
+    if not detections:
+        return None
+
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    filename = capture_dir / f"person_{timestamp}.jpg"
+
+    grayscale_scene = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)
+
+    cv2.imwrite(
+        str(filename),
+        grayscale_scene,
+        [cv2.IMWRITE_JPEG_QUALITY, 60],
+    )
+    return filename
 
 
 def draw_status_banner(canvas, text, color=OSD_COLOR):
@@ -364,8 +413,9 @@ def main():
     WIDTH, HEIGHT = get_display_resolution()
     person_detector = load_person_detector()
     person_detection_enabled = False
-    detection_status_text = ""
-    detection_status_until = 0.0
+    person_capture_enabled = False
+    status_text = ""
+    status_until = 0.0
     cap_thermal = cv2.VideoCapture('demothermal.mp4')
     if not cap_thermal.isOpened():
         print("Erro: Nao foi possivel abrir o video demothermal.mp4")
@@ -415,9 +465,11 @@ def main():
        # --- 3. Desenhar Feeds de Câmera ---
         #frame_normal, frame_thermal = create_simulated_frames(current_time)
         frame_normal, frame_thermal = create_simulated_frames(current_time, cap_normal, cap_thermal)
+        normal_detections = []
+        thermal_detections = []
         if person_detection_enabled:
-            frame_normal = draw_person_detections(frame_normal, person_detector)
-            frame_thermal = draw_person_detections(frame_thermal, person_detector)
+            frame_normal, normal_detections = detect_persons(frame_normal, person_detector)
+            frame_thermal, thermal_detections = detect_persons(frame_thermal, person_detector)
         # Atribuir com base no estado de troca
         if thermal_is_main:
             main_frame = frame_thermal
@@ -475,6 +527,8 @@ def main():
 
         if person_detection_enabled:
             cv2.putText(scene, "DET PESSOAS: ON", (15, 90), FONT, 0.6, OSD_COLOR, 2)
+        if person_capture_enabled:
+            cv2.putText(scene, "PRINT YOLO: ON", (15, 120), FONT, 0.6, OSD_COLOR, 2)
 
         # Canto Superior Direito
         cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
@@ -486,8 +540,15 @@ def main():
         # Canto Inferior (Centro) - Home
         cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
 
-        if current_time < detection_status_until and detection_status_text:
-            draw_status_banner(scene, detection_status_text)
+        active_detections = normal_detections + thermal_detections
+        if person_capture_enabled and active_detections:
+            snapshot_path = save_person_snapshot(scene, active_detections)
+            if snapshot_path is not None:
+                status_text = f"PRINT SALVO: {snapshot_path.name}"
+                status_until = current_time + 2.0
+
+        if current_time < status_until and status_text:
+            draw_status_banner(scene, status_text)
 
 
         # --- 6. Exibir a Cena ---
@@ -503,10 +564,16 @@ def main():
             sim_data["thermal_is_main"] = thermal_is_main # Atualiza o estado global
         if key == ord('d'):
             person_detection_enabled = not person_detection_enabled
-            detection_status_text = (
+            status_text = (
                 "DETECCAO DE PESSOAS ATIVADA" if person_detection_enabled else "DETECCAO DE PESSOAS DESATIVADA"
             )
-            detection_status_until = current_time + 2.0
+            status_until = current_time + 2.0
+        if key == ord('c'):
+            person_capture_enabled = not person_capture_enabled
+            status_text = (
+                "PRINT YOLO ATIVADO" if person_capture_enabled else "PRINT YOLO DESATIVADO"
+            )
+            status_until = current_time + 2.0
 
     if cap_thermal:
         cap_thermal.release()
