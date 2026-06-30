@@ -431,6 +431,13 @@ def draw_status_banner(canvas, text, color=OSD_COLOR):
     cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
     cv2.putText(canvas, text, (x1 + 18, y1 + 29), FONT, 0.8, color, 2)
 
+
+def configure_fullscreen_window(window_name, width, height):
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, width, height)
+    cv2.moveWindow(window_name, 0, 0)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
 # --- Loop Principal da Interface ---
 
 def main():
@@ -456,8 +463,7 @@ def main():
     thermal_is_main = sim_data["thermal_is_main"]
     window_name = "FPV Interface Sim"
 
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    configure_fullscreen_window(window_name, WIDTH, HEIGHT)
 
     last_time = time.time()
 
