@@ -24,6 +24,8 @@ YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
 CAPTURE_DIR = Path(os.getenv("YOLO_CAPTURE_DIR", "captures"))
+NORMAL_CAMERA_SOURCE = int(os.getenv("NORMAL_CAMERA_SOURCE", "0"))
+THERMAL_CAMERA_SOURCE = int(os.getenv("THERMAL_CAMERA_SOURCE", "2"))
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -63,51 +65,46 @@ def get_display_resolution(default_width=WIDTH, default_height=HEIGHT):
 
     return default_width, default_height
 
+
+def read_capture_frame(capture, fallback_shape, error_text, loop=False):
+    if capture:
+        ret, frame = capture.read()
+
+        if not ret and loop:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = capture.read()
+
+        if ret:
+            return frame
+
+    frame = np.zeros(fallback_shape, dtype=np.uint8)
+    frame[:, :] = (50, 50, 50)
+    cv2.putText(frame, error_text, (20, fallback_shape[0] // 2), FONT, 0.8, (0, 0, 255), 2)
+    return frame
+
 # --- Funções de Desenho da Interface ---
 
 
 # A função agora recebe cap_normal e cap_thermal
 def create_simulated_frames(t, cap_normal, cap_thermal):
     """Lê um frame de ambos os vídeos de simulação."""
-    
-    # --- Frame 1 (Simulando Câmera Normal) - CÓDIGO SUBSTITUÍDO ---
-    
-    # Se o vídeo normal foi carregado corretamente
-    if cap_normal:
-        ret_nm, frame_normal = cap_normal.read()
-        
-        # Se o vídeo normal terminou (not ret_nm), reinicia (loop)
-        if not ret_nm:
-            cap_normal.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret_nm, frame_normal = cap_normal.read()
-    else:
-        # Fallback se o vídeo falhou ao carregar
-        ret_nm = False
 
-    # Se a leitura falhou (mesmo após o loop) ou o vídeo não foi carregado
-    if not cap_normal or not ret_nm:
-        frame_normal = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame_normal[:, :] = (80, 40, 40) # Fundo azul escuro
-        cv2.putText(frame_normal, "VIDEO ERROR", (180, 240), FONT, 1, (0, 0, 255), 2)
+    frame_normal = read_capture_frame(
+        cap_normal,
+        (480, 640, 3),
+        "CAMERA 0 ERROR",
+        loop=False,
+    )
 
-    # --- Frame 2 (Simulando Câmera Térmica) - Fica igual ao anterior ---
-    
-    if cap_thermal:
-        ret_th, frame_thermal = cap_thermal.read()
-        
-        if not ret_th:
-            cap_thermal.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret_th, frame_thermal = cap_thermal.read()
-    else:
-        ret_th = False
+    frame_thermal = read_capture_frame(
+        cap_thermal,
+        (192, 256, 3),
+        "CAMERA 2 ERROR",
+        loop=False,
+    )
 
-    if not cap_thermal or not ret_th:
-        frame_thermal = np.zeros((192, 256, 3), dtype=np.uint8)
-        frame_thermal[:, :] = (50, 50, 50) # Fundo cinza
-        cv2.putText(frame_thermal, "VIDEO ERROR", (60, 100), FONT, 0.8, (0, 0, 255), 1)
-        # Aplica um colormap para manter a estética
-        frame_thermal = cv2.applyColorMap(frame_thermal, cv2.COLORMAP_INFERNO)
-    
+    frame_thermal = cv2.applyColorMap(frame_thermal, cv2.COLORMAP_INFERNO)
+
     return frame_normal, frame_thermal
 def draw_artificial_horizon(canvas, roll_deg, pitch_deg, cx, cy, radius):
     """
@@ -416,15 +413,15 @@ def main():
     person_capture_enabled = False
     status_text = ""
     status_until = 0.0
-    cap_thermal = cv2.VideoCapture('demothermal.mp4')
+    cap_thermal = cv2.VideoCapture(THERMAL_CAMERA_SOURCE)
     if not cap_thermal.isOpened():
-        print("Erro: Nao foi possivel abrir o video demothermal.mp4")
+        print(f"Erro: Nao foi possivel abrir a camera {THERMAL_CAMERA_SOURCE}")
         print("Usando simulacao de fallback.")
         cap_thermal = None # Define como None se falhar
 
-    cap_normal = cv2.VideoCapture('demonormal.mp4')
+    cap_normal = cv2.VideoCapture(NORMAL_CAMERA_SOURCE)
     if not cap_normal.isOpened():
-        print("Erro: Nao foi possivel abrir o video demonormal.mp4")
+        print(f"Erro: Nao foi possivel abrir a camera {NORMAL_CAMERA_SOURCE}")
         print("Usando simulacao de fallback.")
         cap_normal = None
     # Estado da Câmera
