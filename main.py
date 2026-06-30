@@ -33,6 +33,27 @@ def resolve_camera_source(preferred_index, by_id_pattern):
         return matches[0]
     return preferred_index
 
+
+def open_camera(preferred_index, by_id_pattern):
+    candidates = []
+
+    for match in sorted(glob.glob(by_id_pattern)):
+        candidates.append(match)
+        real_path = os.path.realpath(match)
+        if real_path != match:
+            candidates.append(real_path)
+
+    candidates.append(preferred_index)
+
+    for source in candidates:
+        for backend in (cv2.CAP_V4L2, cv2.CAP_ANY):
+            capture = cv2.VideoCapture(source, backend)
+            if capture.isOpened():
+                return capture, source
+            capture.release()
+
+    return None, candidates[0] if candidates else preferred_index
+
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
 sim_data = {
@@ -419,16 +440,14 @@ def main():
     person_capture_enabled = False
     status_text = ""
     status_until = 0.0
-    cam2_source = resolve_camera_source(2, "/dev/v4l/by-id/*USB_CAM2*")
-    cam2 = cv2.VideoCapture(cam2_source)
-    if not cam2.isOpened():
+    cam2, cam2_source = open_camera(2, "/dev/v4l/by-id/*USB_CAM2*")
+    if not cam2:
         print(f"Erro: Nao foi possivel abrir a camera {cam2_source}")
         print("Usando simulacao de fallback.")
         cam2 = None # Define como None se falhar
 
-    am1_source = resolve_camera_source(0, "/dev/v4l/by-id/*USB_CAM1*")
-    am1 = cv2.VideoCapture(am1_source)
-    if not am1.isOpened():
+    am1, am1_source = open_camera(0, "/dev/v4l/by-id/*USB_CAM1*")
+    if not am1:
         print(f"Erro: Nao foi possivel abrir a camera {am1_source}")
         print("Usando simulacao de fallback.")
         am1 = None
