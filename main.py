@@ -3,6 +3,7 @@ import numpy as np
 import math
 import time
 import os
+import glob
 from pathlib import Path
 from datetime import datetime
 
@@ -24,6 +25,13 @@ YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
 CAPTURE_DIR = Path(os.getenv("YOLO_CAPTURE_DIR", "captures"))
+
+
+def resolve_camera_source(preferred_index, by_id_pattern):
+    matches = sorted(glob.glob(by_id_pattern))
+    if matches:
+        return matches[0]
+    return preferred_index
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -411,15 +419,17 @@ def main():
     person_capture_enabled = False
     status_text = ""
     status_until = 0.0
-    cam2 = cv2.VideoCapture(2)
+    cam2_source = resolve_camera_source(2, "/dev/v4l/by-id/*USB_CAM2*")
+    cam2 = cv2.VideoCapture(cam2_source)
     if not cam2.isOpened():
-        print("Erro: Nao foi possivel abrir a camera 2")
+        print(f"Erro: Nao foi possivel abrir a camera {cam2_source}")
         print("Usando simulacao de fallback.")
         cam2 = None # Define como None se falhar
 
-    am1 = cv2.VideoCapture(0)
+    am1_source = resolve_camera_source(0, "/dev/v4l/by-id/*USB_CAM1*")
+    am1 = cv2.VideoCapture(am1_source)
     if not am1.isOpened():
-        print("Erro: Nao foi possivel abrir a camera 0")
+        print(f"Erro: Nao foi possivel abrir a camera {am1_source}")
         print("Usando simulacao de fallback.")
         am1 = None
     # Estado da Câmera
