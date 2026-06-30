@@ -4,6 +4,8 @@ import math
 import time
 import os
 import glob
+import threading
+from queue import Queue, Empty, Full
 from pathlib import Path
 from datetime import datetime
 
@@ -24,10 +26,15 @@ OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
 YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
+YOLO_RUNTIME = os.getenv("YOLO_RUNTIME", "auto").lower()
+YOLO_AUTO_EXPORT = os.getenv("YOLO_AUTO_EXPORT", "0") == "1"
+YOLO_EXPORT_FORMAT = os.getenv("YOLO_EXPORT_FORMAT", "openvino").lower()
+YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cpu")
 CAPTURE_DIR = Path(os.getenv("YOLO_CAPTURE_DIR", "captures"))
 DISPLAY_FPS = float(os.getenv("DISPLAY_FPS", "30"))
 TELEMETRY_HZ = float(os.getenv("TELEMETRY_HZ", "10"))
 DETECTION_HZ = float(os.getenv("DETECTION_HZ", "2"))
+YOLO_ACTIVE_BACKEND = "pt"
 
 
 def resolve_camera_source(preferred_index, by_id_pattern):
@@ -52,10 +59,84 @@ def open_camera(preferred_index, by_id_pattern):
         for backend in (cv2.CAP_V4L2, cv2.CAP_ANY):
             capture = cv2.VideoCapture(source, backend)
             if capture.isOpened():
+                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 return capture, source
             capture.release()
 
     return None, candidates[0] if candidates else preferred_index
+
+
+def put_latest(q, item):
+    try:
+        q.put_nowait(item)
+    except Full:
+        try:
+            q.get_nowait()
+        except Empty:
+            pass
+        q.put_nowait(item)
+
+
+def get_latest_or_last(q, last_value):
+    latest = last_value
+    while True:
+        try:
+            latest = q.get_nowait()
+        except Empty:
+            break
+    return latest
+
+
+def create_error_frame(shape, error_text, color=(50, 50, 50)):
+    frame = np.zeros(shape, dtype=np.uint8)
+    frame[:, :] = color
+    cv2.putText(frame, error_text, (20, shape[0] // 2), FONT, 0.8, (0, 0, 255), 2)
+    return frame
+
+
+def capture_worker(capture, output_queues, stop_event):
+    while not stop_event.is_set():
+        ret, frame = capture.read()
+        if not ret:
+            time.sleep(0.005)
+            continue
+
+        if len(frame.shape) == 2 or frame.shape[2] == 1:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+        for q in output_queues:
+            put_latest(q, frame)
+
+
+def yolo_inference_worker(normal_queue, thermal_queue, detector, shared_state, state_lock, stop_event):
+    last_run = 0.0
+    latest_normal = None
+    latest_thermal = None
+
+    while not stop_event.is_set():
+        latest_normal = get_latest_or_last(normal_queue, latest_normal)
+        latest_thermal = get_latest_or_last(thermal_queue, latest_thermal)
+
+        with state_lock:
+            enabled = shared_state["person_detection_enabled"]
+
+        if not enabled or detector is None:
+            time.sleep(0.01)
+            continue
+
+        now = time.time()
+        if now - last_run < 1.0 / DETECTION_HZ:
+            time.sleep(0.005)
+            continue
+
+        normal_detections = detect_persons(latest_normal, detector) if latest_normal is not None else []
+        thermal_detections = detect_persons(latest_thermal, detector) if latest_thermal is not None else []
+
+        with state_lock:
+            shared_state["normal_detections"] = normal_detections
+            shared_state["thermal_detections"] = thermal_detections
+
+        last_run = now
 
 # --- Variáveis de Estado da Simulação ---
 # Dicionário para guardar todos os nossos dados simulados
@@ -345,14 +426,71 @@ def draw_tape(canvas, value, x_pos, y_pos, width, height, is_vertical=True, colo
 
 
 def load_person_detector():
+    global YOLO_ACTIVE_BACKEND
+
     if YOLO is None:
         print("Aviso: ultralytics nao esta instalado; deteccao YOLO desativada.")
         return None
 
     try:
         source = Path(YOLO_MODEL_SOURCE)
+
+        if source.exists() and source.suffix.lower() == ".pt":
+            onnx_source = source.with_suffix(".onnx")
+            openvino_source = source.with_name(f"{source.stem}_openvino_model")
+
+            if YOLO_RUNTIME == "openvino":
+                runtime_order = ["openvino", "onnx", "pt"]
+            elif YOLO_RUNTIME == "onnx":
+                runtime_order = ["onnx", "openvino", "pt"]
+            else:
+                runtime_order = ["openvino", "onnx", "pt"]
+
+            backend_sources = {
+                "openvino": openvino_source,
+                "onnx": onnx_source,
+                "pt": source,
+            }
+
+            selected_backend = "pt"
+            selected_source = source
+
+            for backend in runtime_order:
+                candidate = backend_sources[backend]
+                if backend == "pt" or candidate.exists():
+                    selected_backend = backend
+                    selected_source = candidate
+                    break
+
+            if selected_backend == "pt" and YOLO_AUTO_EXPORT and YOLO_EXPORT_FORMAT in ("onnx", "openvino"):
+                try:
+                    print(f"YOLO: exportando {source.name} para {YOLO_EXPORT_FORMAT}...")
+                    export_model = YOLO(str(source))
+                    export_model.export(format=YOLO_EXPORT_FORMAT, imgsz=YOLO_IMGSZ)
+                    exported_source = backend_sources[YOLO_EXPORT_FORMAT]
+                    if exported_source.exists():
+                        selected_backend = YOLO_EXPORT_FORMAT
+                        selected_source = exported_source
+                except Exception as exc:
+                    print(f"Aviso: falha ao exportar YOLO para {YOLO_EXPORT_FORMAT} ({exc}); seguindo com PT.")
+
+            YOLO_ACTIVE_BACKEND = selected_backend
+            print(f"YOLO backend ativo: {YOLO_ACTIVE_BACKEND} ({selected_source})")
+            return YOLO(str(selected_source))
+
         if source.exists():
+            if source.suffix.lower() == ".onnx":
+                YOLO_ACTIVE_BACKEND = "onnx"
+            elif source.is_dir() and source.name.endswith("_openvino_model"):
+                YOLO_ACTIVE_BACKEND = "openvino"
+            else:
+                YOLO_ACTIVE_BACKEND = "pt"
+
+            print(f"YOLO backend ativo: {YOLO_ACTIVE_BACKEND} ({source})")
             return YOLO(str(source))
+
+        YOLO_ACTIVE_BACKEND = "pt"
+        print(f"YOLO backend ativo: {YOLO_ACTIVE_BACKEND} ({YOLO_MODEL_SOURCE})")
         return YOLO(YOLO_MODEL_SOURCE)
     except Exception as exc:
         print(f"Aviso: nao foi possivel carregar YOLO em {YOLO_MODEL_SOURCE} ({exc}); deteccao desativada.")
@@ -360,23 +498,37 @@ def load_person_detector():
 
 
 def detect_persons(frame, detector):
-    if detector is None:
-        return frame, []
+    if detector is None or frame is None:
+        return []
 
     try:
-        results = detector.predict(frame, conf=YOLO_CONFIDENCE, imgsz=YOLO_IMGSZ, device="cpu", classes=[0], verbose=False)
-        if not results:
-            return frame, []
+        predict_kwargs = {
+            "conf": YOLO_CONFIDENCE,
+            "imgsz": YOLO_IMGSZ,
+            "classes": [0],
+            "verbose": False,
+        }
 
-        annotated = frame.copy()
+        if YOLO_ACTIVE_BACKEND == "pt":
+            predict_kwargs["device"] = YOLO_DEVICE
+
+        try:
+            results = detector.predict(frame, **predict_kwargs)
+        except TypeError:
+            predict_kwargs.pop("device", None)
+            results = detector.predict(frame, **predict_kwargs)
+
+        if not results:
+            return []
+
         detections = []
-        frame_height, frame_width = annotated.shape[:2]
+        frame_height, frame_width = frame.shape[:2]
         center_x = frame_width // 2
         center_y = frame_height // 2
 
         boxes = results[0].boxes
         if boxes is None or len(boxes) == 0:
-            return annotated, []
+            return []
 
         for index, box in enumerate(boxes.xyxy.cpu().numpy(), start=1):
             x1, y1, x2, y2 = [int(value) for value in box]
@@ -391,15 +543,22 @@ def detect_persons(frame, detector):
                 "offset": (offset_x, offset_y),
             })
 
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), OSD_COLOR, 2)
-            label = f"P{index} X:{person_x} Y:{person_y} dX:{offset_x:+d} dY:{offset_y:+d}"
-            label_y = max(20, y1 - 10)
-            cv2.putText(annotated, label, (x1, label_y), FONT, 0.5, OSD_COLOR, 2)
-
-        return annotated, detections
+        return detections
     except Exception as exc:
         print(f"Aviso: falha na deteccao YOLO ({exc}); seguindo sem overlay.")
-        return frame, []
+        return []
+
+
+def draw_person_detections(frame, detections):
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        person_x, person_y = det["center"]
+        offset_x, offset_y = det["offset"]
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), OSD_COLOR, 2)
+        label = f"P{det['index']} X:{person_x} Y:{person_y} dX:{offset_x:+d} dY:{offset_y:+d}"
+        label_y = max(20, y1 - 10)
+        cv2.putText(frame, label, (x1, label_y), FONT, 0.5, OSD_COLOR, 2)
 
 
 def save_person_snapshot(scene, detections, capture_dir=CAPTURE_DIR):
@@ -466,160 +625,180 @@ def main():
     thermal_is_main = sim_data["thermal_is_main"]
     window_name = "FPV Interface Sim"
     last_telemetry_update = 0.0
-    last_detection_update = 0.0
     last_display_frame_time = 0.0
-    cached_normal_detections = []
-    cached_thermal_detections = []
+    stop_event = threading.Event()
+    state_lock = threading.Lock()
+
+    normal_render_queue = Queue(maxsize=1)
+    thermal_render_queue = Queue(maxsize=1)
+    normal_infer_queue = Queue(maxsize=1)
+    thermal_infer_queue = Queue(maxsize=1)
+
+    normal_fallback = create_error_frame((480, 640, 3), "CAMERA 0 ERROR", (80, 40, 40))
+    thermal_fallback = create_error_frame((192, 256, 3), "CAMERA 2 ERROR")
+    last_normal_frame = normal_fallback.copy()
+    last_thermal_frame = thermal_fallback.copy()
+
+    shared_state = {
+        "person_detection_enabled": False,
+        "normal_detections": [],
+        "thermal_detections": [],
+    }
+
+    worker_threads = []
+    if am1:
+        normal_capture_thread = threading.Thread(
+            target=capture_worker,
+            args=(am1, [normal_render_queue, normal_infer_queue], stop_event),
+            daemon=True,
+        )
+        normal_capture_thread.start()
+        worker_threads.append(normal_capture_thread)
+
+    if cam2:
+        thermal_capture_thread = threading.Thread(
+            target=capture_worker,
+            args=(cam2, [thermal_render_queue, thermal_infer_queue], stop_event),
+            daemon=True,
+        )
+        thermal_capture_thread.start()
+        worker_threads.append(thermal_capture_thread)
+
+    yolo_thread = threading.Thread(
+        target=yolo_inference_worker,
+        args=(normal_infer_queue, thermal_infer_queue, person_detector, shared_state, state_lock, stop_event),
+        daemon=True,
+    )
+    yolo_thread.start()
+    worker_threads.append(yolo_thread)
 
     configure_fullscreen_window(window_name, WIDTH, HEIGHT)
 
     last_time = time.time()
 
-    while True:
-        # --- 1. Atualizar Dados Simulados ---
-        current_time = time.time()
-        delta_time = current_time - last_time
-        last_time = current_time
+    try:
+        while True:
+            current_time = time.time()
+            delta_time = current_time - last_time
+            last_time = current_time
 
-        if current_time - last_telemetry_update >= 1.0 / TELEMETRY_HZ:
-            t = current_time * 0.5 # Fator de tempo para animação
+            if current_time - last_telemetry_update >= 1.0 / TELEMETRY_HZ:
+                t = current_time * 0.5
+                sim_data["roll"] = math.sin(t * 0.7) * 30
+                sim_data["pitch"] = math.cos(t * 0.5) * 15
+                sim_data["heading"] = (sim_data["heading"] + delta_time * 5) % 360
+                sim_data["altitude"] = 100 + (math.sin(t * 0.2) * 20)
+                sim_data["airspeed"] = 20 + (math.sin(t * 0.3) * 5)
+                sim_data["ground_speed"] = sim_data["airspeed"] - 1.5
+                sim_data["sats"] = 12 + int(math.sin(t))
+                sim_data["batt_volt"] -= delta_time * 0.01
+                sim_data["lon"] += delta_time * 0.0001
+                last_telemetry_update = current_time
 
-            # Simular voo
-            sim_data["roll"] = math.sin(t * 0.7) * 30  # +/- 30 graus de roll
-            sim_data["pitch"] = math.cos(t * 0.5) * 15 # +/- 15 graus de pitch
-            sim_data["heading"] = (sim_data["heading"] + delta_time * 5) % 360 # Girando 5 deg/s
-            sim_data["altitude"] = 100 + (math.sin(t * 0.2) * 20) # Variando entre 80-120m
-            sim_data["airspeed"] = 20 + (math.sin(t * 0.3) * 5) # Variando entre 15-25 m/s
-            sim_data["ground_speed"] = sim_data["airspeed"] - 1.5 # Vento leve
-            sim_data["sats"] = 12 + int(math.sin(t))
-            sim_data["batt_volt"] -= delta_time * 0.01 # Bateria descarregando lentamente
-            sim_data["lon"] += delta_time * 0.0001 # Movendo para o leste
-            last_telemetry_update = current_time
-        
-        # Calcular distância de casa (simplificado)
-        dist_m = abs(sim_data["lon"] - sim_data["home_lon"]) * 111111 # Aproximação
-        
-        # --- 2. Criar o Canvas Principal ---
-        # Fundo transparente (preto) sobre o qual desenhamos
-        #scene = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+            dist_m = abs(sim_data["lon"] - sim_data["home_lon"]) * 111111
 
-       # --- 3. Desenhar Feeds de Câmera ---
-        #frame_normal, frame_thermal = create_simulated_frames(current_time)
-        frame_normal, frame_thermal = create_simulated_frames(current_time, am1, cam2)
-        if person_detection_enabled and current_time - last_detection_update >= 1.0 / DETECTION_HZ:
-            frame_normal, cached_normal_detections = detect_persons(frame_normal, person_detector)
-            frame_thermal, cached_thermal_detections = detect_persons(frame_thermal, person_detector)
-            last_detection_update = current_time
+            last_normal_frame = get_latest_or_last(normal_render_queue, last_normal_frame)
+            last_thermal_frame = get_latest_or_last(thermal_render_queue, last_thermal_frame)
 
-        normal_detections = cached_normal_detections
-        thermal_detections = cached_thermal_detections
-        # Atribuir com base no estado de troca
-        if thermal_is_main:
-            main_frame = frame_thermal
-            pip_frame = frame_normal
-            # Redimensionar o PiP
-            pip_frame_resized = cv2.resize(pip_frame, (178, 133)) # PiP (tamanho normal)
-        else:
-            main_frame = frame_normal
-            pip_frame = frame_thermal
-            # Redimensionar o PiP
-            pip_frame_resized = cv2.resize(pip_frame, (160, 120)) # PiP (tamanho térmico)
+            frame_normal = last_normal_frame.copy()
+            frame_thermal = last_thermal_frame.copy()
 
-        # --- NOVA LÓGICA ---
-        # 1. O 'scene' AGORA É O VÍDEO PRINCIPAL, ESTICADO PARA A TELA TODA.
-        # Isso efetivamente torna o vídeo o "fundo"
-        scene = cv2.resize(main_frame, (WIDTH, HEIGHT))
+            with state_lock:
+                normal_detections = list(shared_state["normal_detections"])
+                thermal_detections = list(shared_state["thermal_detections"])
 
-        # 2. Colocar o PiP (canto inferior direito) sobre o vídeo de fundo
-        pip_h, pip_w = pip_frame_resized.shape[:2]
-        scene[HEIGHT-pip_h-10 : HEIGHT-10, WIDTH-pip_w-10 : WIDTH-10] = pip_frame_resized
-        # Borda no PiP
-        cv2.rectangle(scene, (WIDTH-pip_w-10, HEIGHT-pip_h-10), (WIDTH-10, HEIGHT-10), OSD_COLOR, 1)
+            if person_detection_enabled:
+                draw_person_detections(frame_normal, normal_detections)
+                draw_person_detections(frame_thermal, thermal_detections)
 
-        # --- 4. Desenhar OSD e PFD ---
-        # O resto do seu código (draw_artificial_horizon, draw_tape, etc.)
-        # agora desenhará DIRETAMENTE SOBRE o 'scene' (que é o vídeo).
-        
-        # Horizonte Artificial (centralizado)
-        draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"], 
-                                cx=WIDTH // 2, cy=HEIGHT // 2 - 50, radius=100)
+            if thermal_is_main:
+                main_frame = frame_thermal
+                pip_frame = frame_normal
+                pip_frame_resized = cv2.resize(pip_frame, (178, 133))
+            else:
+                main_frame = frame_normal
+                pip_frame = frame_thermal
+                pip_frame_resized = cv2.resize(pip_frame, (160, 120))
 
-        # Fita de Velocidade (Airspeed) - Esquerda
-        draw_tape(scene, sim_data["airspeed"], x_pos=40, y_pos=100, 
-                  width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=20, step=5)
-        cv2.putText(scene, "IAS", (45, 90), FONT, 0.7, OSD_COLOR, 1)
-        
-        # Fita de Altitude - Direita
-        draw_tape(scene, sim_data["altitude"], x_pos=WIDTH - 110, y_pos=100, 
-                  width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=50, step=10)
-        cv2.putText(scene, "ALT", (WIDTH - 105, 90), FONT, 0.7, OSD_COLOR, 1)
+            scene = cv2.resize(main_frame, (WIDTH, HEIGHT))
+            pip_h, pip_w = pip_frame_resized.shape[:2]
+            scene[HEIGHT-pip_h-10 : HEIGHT-10, WIDTH-pip_w-10 : WIDTH-10] = pip_frame_resized
+            cv2.rectangle(scene, (WIDTH-pip_w-10, HEIGHT-pip_h-10), (WIDTH-10, HEIGHT-10), OSD_COLOR, 1)
 
-        # Fita da Bússola - Topo
-        draw_tape(scene, sim_data["heading"], x_pos=150, y_pos=50, 
-                  width=WIDTH - 300, height=30, is_vertical=False, color=OSD_COLOR, tick_range=60, step=10)
-        
-        # --- 5. Desenhar Textos do OSD ---
-        # Canto Superior Esquerdo
-        cv2.putText(scene, f"M: {sim_data['flight_mode']}", (15, 30), FONT, 0.7, OSD_COLOR, 1)
-        cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.5, OSD_COLOR, 1)
+            draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"],
+                                    cx=WIDTH // 2, cy=HEIGHT // 2 - 50, radius=100)
 
-        if person_detection_enabled:
-            cv2.putText(scene, "DET PESSOAS: ON", (15, 90), FONT, 0.6, OSD_COLOR, 2)
-        if person_capture_enabled:
-            cv2.putText(scene, "PRINT YOLO: ON", (15, 120), FONT, 0.6, OSD_COLOR, 2)
+            draw_tape(scene, sim_data["airspeed"], x_pos=40, y_pos=100,
+                      width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=20, step=5)
+            cv2.putText(scene, "IAS", (45, 90), FONT, 0.7, OSD_COLOR, 1)
 
-        # Canto Superior Direito
-        cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
+            draw_tape(scene, sim_data["altitude"], x_pos=WIDTH - 110, y_pos=100,
+                      width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=50, step=10)
+            cv2.putText(scene, "ALT", (WIDTH - 105, 90), FONT, 0.7, OSD_COLOR, 1)
 
-        # Canto Inferior Esquerdo
-        cv2.putText(scene, f"LAT {sim_data['lat']:.5f}", (15, HEIGHT - 40), FONT, 0.6, OSD_COLOR, 1)
-        cv2.putText(scene, f"LON {sim_data['lon']:.5f}", (15, HEIGHT - 15), FONT, 0.6, OSD_COLOR, 1)
-        
-        # Canto Inferior (Centro) - Home
-        cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
+            draw_tape(scene, sim_data["heading"], x_pos=150, y_pos=50,
+                      width=WIDTH - 300, height=30, is_vertical=False, color=OSD_COLOR, tick_range=60, step=10)
 
-        active_detections = normal_detections + thermal_detections
-        if person_capture_enabled and active_detections:
-            snapshot_path = save_person_snapshot(scene, active_detections)
-            if snapshot_path is not None:
-                status_text = f"PRINT SALVO: {snapshot_path.name}"
+            cv2.putText(scene, f"M: {sim_data['flight_mode']}", (15, 30), FONT, 0.7, OSD_COLOR, 1)
+            cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.5, OSD_COLOR, 1)
+
+            if person_detection_enabled:
+                cv2.putText(scene, "DET PESSOAS: ON", (15, 90), FONT, 0.6, OSD_COLOR, 2)
+            if person_capture_enabled:
+                cv2.putText(scene, "PRINT YOLO: ON", (15, 120), FONT, 0.6, OSD_COLOR, 2)
+
+            cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
+            cv2.putText(scene, f"LAT {sim_data['lat']:.5f}", (15, HEIGHT - 40), FONT, 0.6, OSD_COLOR, 1)
+            cv2.putText(scene, f"LON {sim_data['lon']:.5f}", (15, HEIGHT - 15), FONT, 0.6, OSD_COLOR, 1)
+            cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
+
+            active_detections = normal_detections + thermal_detections
+            if person_capture_enabled and active_detections:
+                snapshot_path = save_person_snapshot(scene, active_detections)
+                if snapshot_path is not None:
+                    status_text = f"PRINT SALVO: {snapshot_path.name}"
+                    status_until = current_time + 2.0
+
+            if current_time < status_until and status_text:
+                draw_status_banner(scene, status_text)
+
+            if current_time - last_display_frame_time >= 1.0 / DISPLAY_FPS:
+                cv2.imshow(window_name, scene)
+                last_display_frame_time = current_time
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            if key == ord('s'):
+                thermal_is_main = not thermal_is_main
+                sim_data["thermal_is_main"] = thermal_is_main
+            if key == ord('d'):
+                person_detection_enabled = not person_detection_enabled
+                with state_lock:
+                    shared_state["person_detection_enabled"] = person_detection_enabled
+                    if not person_detection_enabled:
+                        shared_state["normal_detections"] = []
+                        shared_state["thermal_detections"] = []
+                status_text = (
+                    "DETECCAO DE PESSOAS ATIVADA" if person_detection_enabled else "DETECCAO DE PESSOAS DESATIVADA"
+                )
                 status_until = current_time + 2.0
+            if key == ord('c'):
+                person_capture_enabled = not person_capture_enabled
+                status_text = (
+                    "PRINT YOLO ATIVADO" if person_capture_enabled else "PRINT YOLO DESATIVADO"
+                )
+                status_until = current_time + 2.0
+    finally:
+        stop_event.set()
+        for thread in worker_threads:
+            thread.join(timeout=0.5)
 
-        if current_time < status_until and status_text:
-            draw_status_banner(scene, status_text)
-
-
-        # --- 6. Exibir a Cena ---
-        # 'scene' é o frame final que será enviado para a saída AV
-        if current_time - last_display_frame_time >= 1.0 / DISPLAY_FPS:
-            cv2.imshow(window_name, scene)
-            last_display_frame_time = current_time
-
-        # --- 7. Lidar com Entradas ---
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'): # 'q' para Sair
-            break
-        if key == ord('s'): # 's' para Trocar (Swap)
-            thermal_is_main = not thermal_is_main
-            sim_data["thermal_is_main"] = thermal_is_main # Atualiza o estado global
-        if key == ord('d'):
-            person_detection_enabled = not person_detection_enabled
-            status_text = (
-                "DETECCAO DE PESSOAS ATIVADA" if person_detection_enabled else "DETECCAO DE PESSOAS DESATIVADA"
-            )
-            status_until = current_time + 2.0
-        if key == ord('c'):
-            person_capture_enabled = not person_capture_enabled
-            status_text = (
-                "PRINT YOLO ATIVADO" if person_capture_enabled else "PRINT YOLO DESATIVADO"
-            )
-            status_until = current_time + 2.0
-
-    if cam2:
-        cam2.release()
-    if am1:
-        am1.release()
-    cv2.destroyAllWindows()
+        if cam2:
+            cam2.release()
+        if am1:
+            am1.release()
+        cv2.destroyAllWindows()
 
 # --- Rodar o Programa ---
 if __name__ == "__main__":
