@@ -25,6 +25,9 @@ YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov8n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
 CAPTURE_DIR = Path(os.getenv("YOLO_CAPTURE_DIR", "captures"))
+DISPLAY_FPS = float(os.getenv("DISPLAY_FPS", "30"))
+TELEMETRY_HZ = float(os.getenv("TELEMETRY_HZ", "10"))
+DETECTION_HZ = float(os.getenv("DETECTION_HZ", "2"))
 
 
 def resolve_camera_source(preferred_index, by_id_pattern):
@@ -462,6 +465,11 @@ def main():
     # Estado da Câmera
     thermal_is_main = sim_data["thermal_is_main"]
     window_name = "FPV Interface Sim"
+    last_telemetry_update = 0.0
+    last_detection_update = 0.0
+    last_display_frame_time = 0.0
+    cached_normal_detections = []
+    cached_thermal_detections = []
 
     configure_fullscreen_window(window_name, WIDTH, HEIGHT)
 
@@ -472,19 +480,21 @@ def main():
         current_time = time.time()
         delta_time = current_time - last_time
         last_time = current_time
-        
-        t = current_time * 0.5 # Fator de tempo para animação
-        
-        # Simular voo
-        sim_data["roll"] = math.sin(t * 0.7) * 30  # +/- 30 graus de roll
-        sim_data["pitch"] = math.cos(t * 0.5) * 15 # +/- 15 graus de pitch
-        sim_data["heading"] = (sim_data["heading"] + delta_time * 5) % 360 # Girando 5 deg/s
-        sim_data["altitude"] = 100 + (math.sin(t * 0.2) * 20) # Variando entre 80-120m
-        sim_data["airspeed"] = 20 + (math.sin(t * 0.3) * 5) # Variando entre 15-25 m/s
-        sim_data["ground_speed"] = sim_data["airspeed"] - 1.5 # Vento leve
-        sim_data["sats"] = 12 + int(math.sin(t))
-        sim_data["batt_volt"] -= delta_time * 0.01 # Bateria descarregando lentamente
-        sim_data["lon"] += delta_time * 0.0001 # Movendo para o leste
+
+        if current_time - last_telemetry_update >= 1.0 / TELEMETRY_HZ:
+            t = current_time * 0.5 # Fator de tempo para animação
+
+            # Simular voo
+            sim_data["roll"] = math.sin(t * 0.7) * 30  # +/- 30 graus de roll
+            sim_data["pitch"] = math.cos(t * 0.5) * 15 # +/- 15 graus de pitch
+            sim_data["heading"] = (sim_data["heading"] + delta_time * 5) % 360 # Girando 5 deg/s
+            sim_data["altitude"] = 100 + (math.sin(t * 0.2) * 20) # Variando entre 80-120m
+            sim_data["airspeed"] = 20 + (math.sin(t * 0.3) * 5) # Variando entre 15-25 m/s
+            sim_data["ground_speed"] = sim_data["airspeed"] - 1.5 # Vento leve
+            sim_data["sats"] = 12 + int(math.sin(t))
+            sim_data["batt_volt"] -= delta_time * 0.01 # Bateria descarregando lentamente
+            sim_data["lon"] += delta_time * 0.0001 # Movendo para o leste
+            last_telemetry_update = current_time
         
         # Calcular distância de casa (simplificado)
         dist_m = abs(sim_data["lon"] - sim_data["home_lon"]) * 111111 # Aproximação
@@ -496,11 +506,13 @@ def main():
        # --- 3. Desenhar Feeds de Câmera ---
         #frame_normal, frame_thermal = create_simulated_frames(current_time)
         frame_normal, frame_thermal = create_simulated_frames(current_time, am1, cam2)
-        normal_detections = []
-        thermal_detections = []
-        if person_detection_enabled:
-            frame_normal, normal_detections = detect_persons(frame_normal, person_detector)
-            frame_thermal, thermal_detections = detect_persons(frame_thermal, person_detector)
+        if person_detection_enabled and current_time - last_detection_update >= 1.0 / DETECTION_HZ:
+            frame_normal, cached_normal_detections = detect_persons(frame_normal, person_detector)
+            frame_thermal, cached_thermal_detections = detect_persons(frame_thermal, person_detector)
+            last_detection_update = current_time
+
+        normal_detections = cached_normal_detections
+        thermal_detections = cached_thermal_detections
         # Atribuir com base no estado de troca
         if thermal_is_main:
             main_frame = frame_thermal
@@ -527,11 +539,6 @@ def main():
         # --- 4. Desenhar OSD e PFD ---
         # O resto do seu código (draw_artificial_horizon, draw_tape, etc.)
         # agora desenhará DIRETAMENTE SOBRE o 'scene' (que é o vídeo).
-        
-        # Horizonte Artificial...
-        draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"], 
-                                cx=WIDTH // 2, cy=HEIGHT // 2, radius=100) # (etc...)
-        # --- 4. Desenhar OSD e PFD ---
         
         # Horizonte Artificial (centralizado)
         draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"], 
@@ -584,7 +591,9 @@ def main():
 
         # --- 6. Exibir a Cena ---
         # 'scene' é o frame final que será enviado para a saída AV
-        cv2.imshow(window_name, scene)
+        if current_time - last_display_frame_time >= 1.0 / DISPLAY_FPS:
+            cv2.imshow(window_name, scene)
+            last_display_frame_time = current_time
 
         # --- 7. Lidar com Entradas ---
         key = cv2.waitKey(1) & 0xFF
