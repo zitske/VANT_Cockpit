@@ -45,7 +45,9 @@ def normalize_imgsz(imgsz, stride=32):
     return make_stride_multiple(imgsz, stride)
 
 
-YOLO_IMGSZ = normalize_imgsz(parse_imgsz(os.getenv("YOLO_IMGSZ", f"{HEIGHT},{WIDTH}")))
+# Inference resolution is independent from the display resolution.
+# Keep this small on Raspberry Pi 5 to preserve FPS.
+YOLO_IMGSZ = normalize_imgsz(parse_imgsz(os.getenv("YOLO_IMGSZ", "192,320")))
 YOLO_RUNTIME = os.getenv("YOLO_RUNTIME", "auto").lower()
 YOLO_AUTO_EXPORT = os.getenv("YOLO_AUTO_EXPORT", "0") == "1"
 YOLO_EXPORT_FORMAT = os.getenv("YOLO_EXPORT_FORMAT", "openvino").lower()
