@@ -485,7 +485,7 @@ def load_person_detector():
             if selected_backend == "pt" and YOLO_AUTO_EXPORT and YOLO_EXPORT_FORMAT in ("onnx", "openvino"):
                 try:
                     print(f"YOLO: exportando {source.name} para {YOLO_EXPORT_FORMAT}...")
-                    export_model = YOLO(str(source))
+                    export_model = YOLO(str(source), task="detect")
                     export_model.export(format=YOLO_EXPORT_FORMAT, imgsz=YOLO_IMGSZ)
                     exported_source = backend_sources[YOLO_EXPORT_FORMAT]
                     if exported_source.exists():
@@ -496,7 +496,7 @@ def load_person_detector():
 
             YOLO_ACTIVE_BACKEND = selected_backend
             print(f"YOLO backend ativo: {YOLO_ACTIVE_BACKEND} ({selected_source})")
-            return YOLO(str(selected_source))
+            return YOLO(str(selected_source), task="detect")
 
         if source.exists():
             if source.suffix.lower() == ".onnx":
@@ -507,11 +507,11 @@ def load_person_detector():
                 YOLO_ACTIVE_BACKEND = "pt"
 
             print(f"YOLO backend ativo: {YOLO_ACTIVE_BACKEND} ({source})")
-            return YOLO(str(source))
+            return YOLO(str(source), task="detect")
 
         YOLO_ACTIVE_BACKEND = "pt"
         print(f"YOLO backend ativo: {YOLO_ACTIVE_BACKEND} ({YOLO_MODEL_SOURCE})")
-        return YOLO(YOLO_MODEL_SOURCE)
+        return YOLO(YOLO_MODEL_SOURCE, task="detect")
     except Exception as exc:
         print(f"Aviso: nao foi possivel carregar YOLO em {YOLO_MODEL_SOURCE} ({exc}); deteccao desativada.")
         return None

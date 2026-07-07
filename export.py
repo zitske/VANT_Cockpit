@@ -10,8 +10,8 @@ def make_stride_multiple(value, stride=32):
 
 YOLO_WIDTH = make_stride_multiple(WIDTH)
 
-# Carrega o modelo (ex: 'yolo11n.pt')
-model = YOLO('yolo11n.pt')
+# Carrega o modelo de deteccao explicitamente.
+model = YOLO('yolo11n.pt', task='detect')
 
 # Exporta usando a resolução do app principal.
 # Ultralytics espera (altura, largura) ao receber tuple.
