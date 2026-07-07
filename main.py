@@ -34,7 +34,18 @@ def parse_imgsz(value):
     return int(value)
 
 
-YOLO_IMGSZ = parse_imgsz(os.getenv("YOLO_IMGSZ", f"{HEIGHT},{WIDTH}"))
+def make_stride_multiple(value, stride=32):
+    return int(math.ceil(value / stride) * stride)
+
+
+def normalize_imgsz(imgsz, stride=32):
+    if isinstance(imgsz, tuple):
+        height, width = imgsz
+        return make_stride_multiple(height, stride), make_stride_multiple(width, stride)
+    return make_stride_multiple(imgsz, stride)
+
+
+YOLO_IMGSZ = normalize_imgsz(parse_imgsz(os.getenv("YOLO_IMGSZ", f"{HEIGHT},{WIDTH}")))
 YOLO_RUNTIME = os.getenv("YOLO_RUNTIME", "auto").lower()
 YOLO_AUTO_EXPORT = os.getenv("YOLO_AUTO_EXPORT", "0") == "1"
 YOLO_EXPORT_FORMAT = os.getenv("YOLO_EXPORT_FORMAT", "openvino").lower()
