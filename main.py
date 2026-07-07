@@ -649,8 +649,6 @@ def main():
 
     normal_render_queue = Queue(maxsize=1)
     thermal_render_queue = Queue(maxsize=1)
-    normal_infer_queue = Queue(maxsize=1)
-    thermal_infer_queue = Queue(maxsize=1)
 
     normal_fallback = create_error_frame((480, 640, 3), "CAMERA 0 ERROR", (80, 40, 40))
     thermal_fallback = create_error_frame((192, 256, 3), "CAMERA 2 ERROR")
@@ -659,15 +657,14 @@ def main():
 
     shared_state = {
         "person_detection_enabled": False,
-        "normal_detections": [],
-        "thermal_detections": [],
+        "active_detections": [],
     }
 
     worker_threads = []
     if am1:
         normal_capture_thread = threading.Thread(
             target=capture_worker,
-            args=(am1, [normal_render_queue, normal_infer_queue], stop_event),
+            args=(am1, [normal_render_queue], stop_event),
             daemon=True,
         )
         normal_capture_thread.start()
@@ -676,23 +673,17 @@ def main():
     if cam2:
         thermal_capture_thread = threading.Thread(
             target=capture_worker,
-            args=(cam2, [thermal_render_queue, thermal_infer_queue], stop_event),
+            args=(cam2, [thermal_render_queue], stop_event),
             daemon=True,
         )
         thermal_capture_thread.start()
         worker_threads.append(thermal_capture_thread)
 
-    yolo_thread = threading.Thread(
-        target=yolo_inference_worker,
-        args=(normal_infer_queue, thermal_infer_queue, person_detector, shared_state, state_lock, stop_event),
-        daemon=True,
-    )
-    yolo_thread.start()
-    worker_threads.append(yolo_thread)
-
     configure_fullscreen_window(window_name, WIDTH, HEIGHT)
 
     last_time = time.time()
+    last_detection_time = 0.0
+    active_detections = []
 
     try:
         while True:
@@ -721,14 +712,6 @@ def main():
             frame_normal = last_normal_frame.copy()
             frame_thermal = last_thermal_frame.copy()
 
-            with state_lock:
-                normal_detections = list(shared_state["normal_detections"])
-                thermal_detections = list(shared_state["thermal_detections"])
-
-            if person_detection_enabled:
-                draw_person_detections(frame_normal, normal_detections)
-                draw_person_detections(frame_thermal, thermal_detections)
-
             if thermal_is_main:
                 main_frame = frame_thermal
                 pip_frame = frame_normal
@@ -737,6 +720,18 @@ def main():
                 main_frame = frame_normal
                 pip_frame = frame_thermal
                 pip_frame_resized = cv2.resize(pip_frame, (160, 120))
+
+            if not person_detection_enabled:
+                active_detections = []
+            elif person_detector is not None and current_time - last_detection_time >= 1.0 / DETECTION_HZ:
+                active_detections = detect_persons(main_frame, person_detector)
+                last_detection_time = current_time
+
+            if person_detection_enabled and active_detections:
+                draw_person_detections(main_frame, active_detections)
+
+            with state_lock:
+                shared_state["active_detections"] = list(active_detections)
 
             scene = cv2.resize(main_frame, (WIDTH, HEIGHT))
             pip_h, pip_w = pip_frame_resized.shape[:2]
@@ -791,6 +786,8 @@ def main():
             if key == ord('s'):
                 thermal_is_main = not thermal_is_main
                 sim_data["thermal_is_main"] = thermal_is_main
+                last_detection_time = 0.0
+                active_detections = []
             if key == ord('h'):
                 nav_hud_enabled = not nav_hud_enabled
                 status_text = (
@@ -802,8 +799,8 @@ def main():
                 with state_lock:
                     shared_state["person_detection_enabled"] = person_detection_enabled
                     if not person_detection_enabled:
-                        shared_state["normal_detections"] = []
-                        shared_state["thermal_detections"] = []
+                        shared_state["active_detections"] = []
+                        active_detections = []
                 status_text = (
                     "DETECCAO DE PESSOAS ATIVADA" if person_detection_enabled else "DETECCAO DE PESSOAS DESATIVADA"
                 )
