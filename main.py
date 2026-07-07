@@ -776,7 +776,6 @@ def main():
                 cv2.putText(scene, f"LON {sim_data['lon']:.5f}", (15, HEIGHT - 15), FONT, 0.6, OSD_COLOR, 1)
                 cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
 
-            active_detections = normal_detections + thermal_detections
             if person_capture_enabled and active_detections:
                 snapshot_path = save_person_snapshot(scene, active_detections)
                 if snapshot_path is not None:
