@@ -23,7 +23,7 @@ except ImportError:
 WIDTH, HEIGHT = 720, 576 # Resolução PAL SD
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
-YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolov11n.pt")
+YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolo11n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
 YOLO_RUNTIME = os.getenv("YOLO_RUNTIME", "auto").lower()
