@@ -618,6 +618,15 @@ def configure_fullscreen_window(window_name, width, height):
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
+
+def set_window_fullscreen(window_name, width, height, fullscreen_enabled):
+    if fullscreen_enabled:
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    else:
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, width, height)
+        cv2.moveWindow(window_name, 0, 0)
+
 # --- Loop Principal da Interface ---
 
 def main():
@@ -684,6 +693,7 @@ def main():
     last_time = time.time()
     last_detection_time = 0.0
     active_detections = []
+    fullscreen_enabled = True
 
     try:
         while True:
@@ -792,6 +802,13 @@ def main():
                 nav_hud_enabled = not nav_hud_enabled
                 status_text = (
                     "HUD DE NAVEGACAO ATIVADO" if nav_hud_enabled else "HUD DE NAVEGACAO DESATIVADO"
+                )
+                status_until = current_time + 2.0
+            if key == ord('f'):
+                fullscreen_enabled = not fullscreen_enabled
+                set_window_fullscreen(window_name, WIDTH, HEIGHT, fullscreen_enabled)
+                status_text = (
+                    "FULLSCREEN ATIVADO" if fullscreen_enabled else "JANELA NORMAL ATIVADA"
                 )
                 status_until = current_time + 2.0
             if key == ord('d'):
