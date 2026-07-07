@@ -625,6 +625,7 @@ def main():
     person_detector = load_person_detector()
     person_detection_enabled = False
     person_capture_enabled = False
+    nav_hud_enabled = False
     status_text = ""
     status_until = 0.0
     cam2, cam2_source = open_camera(2, "/dev/v4l/by-id/*USB_CAM2*")
@@ -742,32 +743,33 @@ def main():
             scene[HEIGHT-pip_h-10 : HEIGHT-10, WIDTH-pip_w-10 : WIDTH-10] = pip_frame_resized
             cv2.rectangle(scene, (WIDTH-pip_w-10, HEIGHT-pip_h-10), (WIDTH-10, HEIGHT-10), OSD_COLOR, 1)
 
-            draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"],
-                                    cx=WIDTH // 2, cy=HEIGHT // 2 - 50, radius=100)
+            if nav_hud_enabled:
+                draw_artificial_horizon(scene, sim_data["roll"], sim_data["pitch"],
+                                        cx=WIDTH // 2, cy=HEIGHT // 2 - 50, radius=100)
 
-            draw_tape(scene, sim_data["airspeed"], x_pos=40, y_pos=100,
-                      width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=20, step=5)
-            cv2.putText(scene, "IAS", (45, 90), FONT, 0.7, OSD_COLOR, 1)
+                draw_tape(scene, sim_data["airspeed"], x_pos=40, y_pos=100,
+                          width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=20, step=5)
+                cv2.putText(scene, "IAS", (45, 90), FONT, 0.7, OSD_COLOR, 1)
 
-            draw_tape(scene, sim_data["altitude"], x_pos=WIDTH - 110, y_pos=100,
-                      width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=50, step=10)
-            cv2.putText(scene, "ALT", (WIDTH - 105, 90), FONT, 0.7, OSD_COLOR, 1)
+                draw_tape(scene, sim_data["altitude"], x_pos=WIDTH - 110, y_pos=100,
+                          width=70, height=HEIGHT - 200, is_vertical=True, color=OSD_COLOR, tick_range=50, step=10)
+                cv2.putText(scene, "ALT", (WIDTH - 105, 90), FONT, 0.7, OSD_COLOR, 1)
 
-            draw_tape(scene, sim_data["heading"], x_pos=150, y_pos=50,
-                      width=WIDTH - 300, height=30, is_vertical=False, color=OSD_COLOR, tick_range=60, step=10)
+                draw_tape(scene, sim_data["heading"], x_pos=150, y_pos=50,
+                          width=WIDTH - 300, height=30, is_vertical=False, color=OSD_COLOR, tick_range=60, step=10)
 
-            cv2.putText(scene, f"M: {sim_data['flight_mode']}", (15, 30), FONT, 0.7, OSD_COLOR, 1)
-            cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.5, OSD_COLOR, 1)
+                cv2.putText(scene, f"M: {sim_data['flight_mode']}", (15, 30), FONT, 0.7, OSD_COLOR, 1)
+                cv2.putText(scene, f"GPS: {sim_data['sats']} SAT", (15, 60), FONT, 0.5, OSD_COLOR, 1)
 
-            if person_detection_enabled:
-                cv2.putText(scene, "DET PESSOAS: ON", (15, 90), FONT, 0.6, OSD_COLOR, 2)
-            if person_capture_enabled:
-                cv2.putText(scene, "PRINT YOLO: ON", (15, 120), FONT, 0.6, OSD_COLOR, 2)
+                if person_detection_enabled:
+                    cv2.putText(scene, "DET PESSOAS: ON", (15, 90), FONT, 0.6, OSD_COLOR, 2)
+                if person_capture_enabled:
+                    cv2.putText(scene, "PRINT YOLO: ON", (15, 120), FONT, 0.6, OSD_COLOR, 2)
 
-            cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
-            cv2.putText(scene, f"LAT {sim_data['lat']:.5f}", (15, HEIGHT - 40), FONT, 0.6, OSD_COLOR, 1)
-            cv2.putText(scene, f"LON {sim_data['lon']:.5f}", (15, HEIGHT - 15), FONT, 0.6, OSD_COLOR, 1)
-            cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
+                cv2.putText(scene, f"{sim_data['batt_volt']:.1f}V", (WIDTH - 100, 30), FONT, 0.7, OSD_COLOR, 1)
+                cv2.putText(scene, f"LAT {sim_data['lat']:.5f}", (15, HEIGHT - 40), FONT, 0.6, OSD_COLOR, 1)
+                cv2.putText(scene, f"LON {sim_data['lon']:.5f}", (15, HEIGHT - 15), FONT, 0.6, OSD_COLOR, 1)
+                cv2.putText(scene, f"H {int(dist_m)}m", (WIDTH//2 - 40, HEIGHT - 15), FONT, 0.7, OSD_COLOR, 2)
 
             active_detections = normal_detections + thermal_detections
             if person_capture_enabled and active_detections:
@@ -789,6 +791,12 @@ def main():
             if key == ord('s'):
                 thermal_is_main = not thermal_is_main
                 sim_data["thermal_is_main"] = thermal_is_main
+            if key == ord('h'):
+                nav_hud_enabled = not nav_hud_enabled
+                status_text = (
+                    "HUD DE NAVEGACAO ATIVADO" if nav_hud_enabled else "HUD DE NAVEGACAO DESATIVADO"
+                )
+                status_until = current_time + 2.0
             if key == ord('d'):
                 person_detection_enabled = not person_detection_enabled
                 with state_lock:
