@@ -20,7 +20,7 @@ except ImportError:
     tk = None
 
 # --- Configurações da Interface ---
-WIDTH, HEIGHT = 1280, 720 # Proporção 16:9
+WIDTH, HEIGHT = 720, 480 # Resolução nativa
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
 YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolo11n.pt")
