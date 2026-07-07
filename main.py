@@ -25,7 +25,16 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 OSD_COLOR = (0, 255, 0) # Verde clássico de FPV
 YOLO_MODEL_SOURCE = os.getenv("YOLO_WEIGHTS_PATH", "yolo11n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
-YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "320"))
+
+def parse_imgsz(value):
+    value = value.strip()
+    if "," in value:
+        height_str, width_str = value.split(",", 1)
+        return int(height_str), int(width_str)
+    return int(value)
+
+
+YOLO_IMGSZ = parse_imgsz(os.getenv("YOLO_IMGSZ", f"{HEIGHT},{WIDTH}"))
 YOLO_RUNTIME = os.getenv("YOLO_RUNTIME", "auto").lower()
 YOLO_AUTO_EXPORT = os.getenv("YOLO_AUTO_EXPORT", "0") == "1"
 YOLO_EXPORT_FORMAT = os.getenv("YOLO_EXPORT_FORMAT", "openvino").lower()
@@ -596,15 +605,12 @@ def draw_status_banner(canvas, text, color=OSD_COLOR):
 
 def configure_fullscreen_window(window_name, width, height):
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, width, height)
-    cv2.moveWindow(window_name, 0, 0)
     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
 # --- Loop Principal da Interface ---
 
 def main():
     global sim_data, WIDTH, HEIGHT # Usar o dicionário global e a resolução detectada
-    WIDTH, HEIGHT = get_display_resolution()
     person_detector = load_person_detector()
     person_detection_enabled = False
     person_capture_enabled = False
