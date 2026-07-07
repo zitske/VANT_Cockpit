@@ -59,6 +59,12 @@ DETECTION_HZ = float(os.getenv("DETECTION_HZ", "2"))
 YOLO_ACTIVE_BACKEND = "pt"
 
 
+def has_gui_display():
+    if os.getenv("FORCE_HEADLESS", "0") == "1":
+        return False
+    return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
+
+
 def resolve_camera_source(preferred_index, by_id_pattern):
     matches = sorted(glob.glob(by_id_pattern))
     if matches:
@@ -657,6 +663,7 @@ def main():
     last_display_frame_time = 0.0
     stop_event = threading.Event()
     state_lock = threading.Lock()
+    gui_enabled = has_gui_display()
 
     normal_render_queue = Queue(maxsize=1)
     thermal_render_queue = Queue(maxsize=1)
@@ -690,7 +697,14 @@ def main():
         thermal_capture_thread.start()
         worker_threads.append(thermal_capture_thread)
 
-    configure_fullscreen_window(window_name, WIDTH, HEIGHT)
+    if gui_enabled:
+        try:
+            configure_fullscreen_window(window_name, WIDTH, HEIGHT)
+        except cv2.error as exc:
+            gui_enabled = False
+            print(f"Aviso: interface gráfica indisponível, executando em modo headless: {exc}")
+    else:
+        print("Aviso: nenhuma sessão gráfica detectada, executando em modo headless.")
 
     last_time = time.time()
     last_detection_time = 0.0
@@ -787,11 +801,15 @@ def main():
             if current_time < status_until and status_text:
                 draw_status_banner(scene, status_text)
 
-            if current_time - last_display_frame_time >= 1.0 / DISPLAY_FPS:
-                cv2.imshow(window_name, scene)
-                last_display_frame_time = current_time
+            if gui_enabled and current_time - last_display_frame_time >= 1.0 / DISPLAY_FPS:
+                try:
+                    cv2.imshow(window_name, scene)
+                    last_display_frame_time = current_time
+                except cv2.error as exc:
+                    gui_enabled = False
+                    print(f"Aviso: falha ao exibir janela OpenCV, mudando para modo headless: {exc}")
 
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKey(1) & 0xFF if gui_enabled else 255
             if key == ord('q'):
                 break
             if key == ord('s'):
@@ -807,7 +825,8 @@ def main():
                 status_until = current_time + 2.0
             if key == ord('f'):
                 fullscreen_enabled = not fullscreen_enabled
-                set_window_fullscreen(window_name, WIDTH, HEIGHT, fullscreen_enabled)
+                if gui_enabled:
+                    set_window_fullscreen(window_name, WIDTH, HEIGHT, fullscreen_enabled)
                 status_text = (
                     "FULLSCREEN ATIVADO" if fullscreen_enabled else "JANELA NORMAL ATIVADA"
                 )
