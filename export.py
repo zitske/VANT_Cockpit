@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 
-# Mesma resolução base usada no main.py: PAL SD 720x576
-WIDTH, HEIGHT = 720, 576
+# Mesma resolução base usada no main.py: 16:9
+WIDTH, HEIGHT = 1280, 720
 
 
 def make_stride_multiple(value, stride=32):
